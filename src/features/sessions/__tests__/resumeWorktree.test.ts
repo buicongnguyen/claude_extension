@@ -64,7 +64,7 @@ vi.mock("../../../extension/worktrees", () => ({
   clearWorktreeCache: () => clearWorktreeCache(),
 }));
 
-import { resumeSession, resumeAfterAccountSwitch } from "../commands";
+import { resumeSession, resumeAfterAccountSwitch, continueStoppedTask, CONTINUE_TASK_PROMPT } from "../commands";
 import type { Session } from "../types";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -87,7 +87,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 function worktreeRef(path: string, kind: WorktreeRef["kind"] = "claude"): WorktreeRef {
-  return { path, branch: "worktree-feat", kind, exists: true, locked: false, repoRoot: "/repo" };
+  return { path, branch: kind === "main" ? "main" : "worktree-feat", kind, exists: true, locked: false, repoRoot: "/repo" };
 }
 
 function forceTerminalResumeIn(): void {
@@ -213,5 +213,66 @@ describe("fresh recovery branch checkout", () => {
     const error = vi.spyOn(vscode.window, "showErrorMessage");
     await resumeAfterAccountSwitch(sess.id, [sess]);
     expect(error).toHaveBeenCalled(); expect(terminalCalls).toEqual([]);
+  });
+});
+
+describe("Continue task — sibling checkout", () => {
+  it("continues the task in a sibling worktree without a project-window hop", async () => {
+    const sess = makeSession(); mockWorkspace = "/repo";
+    mockResolveWorktree = (dir) => worktreeRef(dir, dir === "/repo" ? "main" : "claude");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Old session closed — continue" as never);
+    const open = vi.spyOn(vscode.commands, "executeCommand");
+    await continueStoppedTask(sess.id, [sess]);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(terminalCalls).toHaveLength(1);
+    expect(terminalCalls[0].cwd).toBe(sess.projectPath);
+    expect(terminalCalls[0].sent).toEqual([`claude --resume ${sess.id} "${CONTINUE_TASK_PROMPT}"`]);
+    expect(open).not.toHaveBeenCalled(); expect(checkout).not.toHaveBeenCalled();
+  });
+  it("opens sibling worktree history in its terminal without a project-window hop", async () => {
+    const sess = makeSession(); mockWorkspace = "/repo";
+    mockResolveWorktree = (dir) => worktreeRef(dir, dir === "/repo" ? "main" : "user");
+    const open = vi.spyOn(vscode.commands, "executeCommand");
+    await resumeSession(sess.id, false, [sess]);
+    expect(terminalCalls[0].cwd).toBe(sess.projectPath);
+    expect(terminalCalls[0].sent).toEqual([`claude --resume ${sess.id}`]);
+    expect(open).not.toHaveBeenCalled();
+  });
+  it("keeps a different repository and a removed sibling outside continuation", async () => {
+    const sess = makeSession(); mockWorkspace = "/other";
+    mockResolveWorktree = (dir) => ({ ...worktreeRef(dir), repoRoot: dir === "/other" ? "/other" : "/repo" });
+    const info = vi.spyOn(vscode.window, "showInformationMessage");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage");
+    await continueStoppedTask(sess.id, [sess]);
+    mockWorkspace = "/repo";
+    mockResolveWorktree = (dir) => ({ ...worktreeRef(dir), exists: dir === "/repo" });
+    await continueStoppedTask(sess.id, [sess]);
+    expect(info).toHaveBeenCalledTimes(2); expect(warning).not.toHaveBeenCalled();
+    expect(terminalCalls).toEqual([]);
+  });
+  it("checks the historical branch against the terminal cwd", async () => {
+    const sess = makeSession({ projectPath: "/repo-b", branch: "main" });
+    mockWorkspace = "/repo-b"; mockCurrentBranch = "feature";
+    const branch = vi.spyOn(await import("../../../extension/git"), "getCurrentBranch");
+    vi.spyOn(vscode.window, "showWarningMessage")
+      .mockResolvedValueOnce("Old session closed — continue" as never)
+      .mockResolvedValueOnce("Resume Anyway" as never);
+    await continueStoppedTask(sess.id, [sess]);
+    expect(branch).toHaveBeenCalledWith("/repo-b");
+    expect(terminalCalls[0].cwd).toBe("/repo-b");
+  });
+});
+
+describe("main-checkout session from a sibling workspace", () => {
+  it("checks the freshly resolved main branch when that checkout is absent from the Git API", async () => {
+    const sess = makeSession({ projectPath: "/repo", branch: "historical" });
+    mockWorkspace = "/repo/.claude/worktrees/current"; mockCurrentBranch = "";
+    mockResolveWorktree = dir => worktreeRef(dir, dir === "/repo" ? "main" : "claude");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage")
+      .mockResolvedValueOnce("Old session closed — continue" as never)
+      .mockResolvedValueOnce("Resume Anyway" as never);
+    await continueStoppedTask(sess.id, [sess]);
+    expect(warning.mock.calls[1][0]).toContain('but you\'re on "main"');
+    expect(terminalCalls[0].cwd).toBe("/repo");
   });
 });

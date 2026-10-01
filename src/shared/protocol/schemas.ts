@@ -1,4 +1,6 @@
+// Modified for the personal fork, October 2026. See NOTICE.
 import * as v from "valibot";
+import { isMcpCliName, MCP_NAME_ERROR } from "../mcpNames";
 import type { Message } from "./messages";
 
 export type { Message } from "./messages";
@@ -182,8 +184,9 @@ const updateMcpServer = v.object({
   originalName: v.string(),
   server: mcpServerInput,
 });
-const authenticateMcp = v.object({ type: v.literal("authenticateMcp"), name: v.string() });
-const logoutMcp = v.object({ type: v.literal("logoutMcp"), name: v.string() });
+const mcpCliName = v.pipe(v.string(), v.check(isMcpCliName, MCP_NAME_ERROR));
+const authenticateMcp = v.object({ type: v.literal("authenticateMcp"), name: mcpCliName });
+const logoutMcp = v.object({ type: v.literal("logoutMcp"), name: mcpCliName });
 const reconnectMcp = v.object({ type: v.literal("reconnectMcp") });
 const mcpListStatus = v.object({ type: v.literal("mcpListStatus") });
 const getAgents = v.object({ type: v.literal("getAgents") });

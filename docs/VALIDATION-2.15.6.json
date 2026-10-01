@@ -1,0 +1,95 @@
+{
+  "version": "2.15.6",
+  "date": "2026-10-01",
+  "command": "npx vitest run --maxWorkers=2 --testTimeout=15000 --reporter=json",
+  "passed": 3956,
+  "failed": 19,
+  "total": 3975,
+  "files": 298,
+  "baselineFailures": 19,
+  "newFailures": [],
+  "missingBaseline": [],
+  "failingTests": [
+    {
+      "file": "features/checkpoints/__tests__/messageHandlers.test.ts",
+      "test": "handleCheckpointsMessage — getCheckpoints posts the session's files with its orphan count"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "resolveTrackedPath joins a workspace-relative key onto realParentDir"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "resolveTrackedPath agrees with an absolute key, whose realParentDir is its own dirname"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "resolveTrackedPath collapses a traversing key into realParentDir rather than above it"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots unions records across lines and keeps one entry per version"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots folds workspace-relative keys under their absolute path"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots keeps the highest version as latest even when lines arrive out of order"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots trusts the filename's version over a disagreeing version field"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots drops the 'tracked but not yet backed up' records"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots drops a later record that re-points an existing file at another blob"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "foldSnapshots leaves availability false — that is the blob index's job"
+    },
+    {
+      "file": "features/checkpoints/__tests__/parser.test.ts",
+      "test": "parseSessionCheckpoints handles a transcript written in Claude Code's real record shape"
+    },
+    {
+      "file": "features/memory/__tests__/commands.test.ts",
+      "test": "deleteMemory reports a failed delete instead of throwing"
+    },
+    {
+      "file": "features/memory/__tests__/parser.test.ts",
+      "test": "decodeProjectLabel recovers a folder name containing dashes"
+    },
+    {
+      "file": "features/memory/__tests__/parser.test.ts",
+      "test": "decodeProjectLabel recovers a plain folder name"
+    },
+    {
+      "file": "features/memory/__tests__/parser.test.ts",
+      "test": "decodeProjectLabel falls back to the deepest directory that still exists"
+    },
+    {
+      "file": "features/plugins/__tests__/parser.test.ts",
+      "test": "managedSettingsPath resolves the platform-specific admin policy file"
+    },
+    {
+      "file": "features/sessions/__tests__/createWorktree.test.ts",
+      "test": "createWorktreeForSession recreates via git worktree add with array args, then resumes"
+    },
+    {
+      "file": "features/sessions/__tests__/createWorktree.test.ts",
+      "test": "createWorktreeForSession surfaces git stderr when the worktree add fails"
+    }
+  ],
+  "typecheck": "passed",
+  "configuredBiome": "passed (131 files)",
+  "build": "passed",
+  "installerInspection": "runtime bundles match; no account stores, snapshots, test fixtures or maps",
+  "liveClaudeQuotaAndAccounts": "not exercised"
+}

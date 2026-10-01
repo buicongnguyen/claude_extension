@@ -263,22 +263,25 @@ function invalidateKeychainCache(): void {
  * "denied" vs "absent"), unlike the file backend where ENOENT is the
  * only failure shape that matters.
  */
-function readFromKeychainDarwinStatus(): ReadStatus {
+function readFromKeychainDarwinStatus(fresh = false): ReadStatus {
   if (process.platform !== "darwin") return { state: "missing" };
-  if (keychainCache && Date.now() - keychainCache.readAt < KEYCHAIN_CACHE_TTL_MS) {
+  if (!fresh && keychainCache && Date.now() - keychainCache.readAt < KEYCHAIN_CACHE_TTL_MS) {
     return keychainCache.status;
   }
-  const status = readFromKeychainDarwinStatusUncached();
+  const status = readFromKeychainDarwinStatusUncached(fresh);
   keychainCache = { status, readAt: Date.now() };
   return status;
 }
 
-function readFromKeychainDarwinStatusUncached(): ReadStatus {
+function readFromKeychainDarwinStatusUncached(requireAuthoritative = false): ReadStatus {
   let sawTransient = false;
   for (const service of [KEYCHAIN_SERVICE, KEYCHAIN_LEGACY_SERVICE]) {
     const r = runSecurityRead(service);
     if (r.status === "absent") continue;
     if (r.status !== "ok") {
+      // A mutation must not replace an unreadable current service using a
+      // readable legacy item as its recovery baseline.
+      if (requireAuthoritative) return { state: "transient" };
       // Locked / denied / unreachable / error — we don't know whether
       // the user is signed in or not. Surface as transient so the
       // diagnostics check can render the precise reason; quota/etc
@@ -288,6 +291,7 @@ function readFromKeychainDarwinStatusUncached(): ReadStatus {
     }
     const raw = r.stdout;
     if (!raw.trim()) {
+      if (requireAuthoritative) return { state: "transient" };
       sawTransient = true;
       continue;
     }
@@ -295,6 +299,7 @@ function readFromKeychainDarwinStatusUncached(): ReadStatus {
     try {
       blob = JSON.parse(raw);
     } catch {
+      if (requireAuthoritative) return { state: "transient" };
       sawTransient = true;
       continue;
     }
@@ -391,7 +396,9 @@ export function readCredentials(): LiveCredentials | null {
  * masked by a Keychain success — file is the authoritative store
  * once it exists, matching Claude CLI behaviour).
  */
-export function readCredentialsStatus():
+/** Mutation/recovery callers pass fresh after acquiring Claude's locks.
+ * This bypasses UI caching and never falls back past an unreadable store. */
+export function readCredentialsStatus(options: { fresh?: boolean } = {}):
   | { state: "ok"; live: LiveCredentials }
   | { state: "missing" }
   | { state: "transient" } {
@@ -399,7 +406,7 @@ export function readCredentialsStatus():
   if (fileStatus.state === "ok") return fileStatus;
   if (fileStatus.state === "transient") return fileStatus;
   // fileStatus.state === "missing" → consult platform-native store.
-  return readFromKeychainDarwinStatus();
+  return readFromKeychainDarwinStatus(options.fresh);
 }
 
 /**

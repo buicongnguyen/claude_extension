@@ -1,3 +1,4 @@
+// Modified for the personal fork, October 2026. See NOTICE.
 /**
  * Host-side message dispatch for the MCP feature. The feature owns its own
  * handler logic; every inbound message is validated against the shared
@@ -41,16 +42,6 @@ export interface McpHostContext {
 /** Coerce an arbitrary string scope to a known MCP scope, else null. */
 function asScope(value: string): McpServerScope | null {
   return value === "global" || value === "project" || value === "plugin" ? value : null;
-}
-
-/**
- * Single-quote a server name for safe use in the terminal command line
- * (server names are user-controlled config keys). Wraps in single
- * quotes and escapes any embedded single quote — works for bash/zsh;
- * on Windows the value reaches `claude` as a literal argument.
- */
-function shellArg(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -223,13 +214,14 @@ export async function handleMcpMessage(
     }
 
     case "authenticateMcp": {
-      // `claude mcp login <name>` runs the OAuth flow from the terminal.
-      ctx.runShellCommand(`mcp login ${msg.name}`, `claude mcp login ${shellArg(msg.name)}`);
+      // The protocol accepts only safe CLI names. No shell-specific escaping
+      // is needed, so the same command is safe in PowerShell, cmd, and POSIX shells.
+      ctx.runShellCommand(`mcp login ${msg.name}`, `claude mcp login ${msg.name}`);
       return true;
     }
 
     case "logoutMcp": {
-      ctx.runShellCommand(`mcp logout ${msg.name}`, `claude mcp logout ${shellArg(msg.name)}`);
+      ctx.runShellCommand(`mcp logout ${msg.name}`, `claude mcp logout ${msg.name}`);
       return true;
     }
 

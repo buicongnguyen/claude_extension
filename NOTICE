@@ -14,4 +14,7 @@ installation documentation.
 Additional personal fork modifications, October 2026: fresh session recovery after
 account switching, chat handoff handling, terminal lifecycle tracking and portable
 branch checkout before resume, and explicit post-reset task continuation.
+Additional October 2026 hardening: uncached mutation reads, independent lock
+heartbeats and ownership checks, constrained Brain archives, locked MCP writes,
+exclusive atomic temporary files and process-ancestry terminal matching.
 This is not an upstream release or an official Anthropic product.

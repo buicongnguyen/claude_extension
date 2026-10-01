@@ -2,11 +2,11 @@
 /**
  * SessionStart hook executed by Claude CLI on every session boot. Reads
  * the hook payload from stdin (`{ session_id, transcript_path, cwd, … }`),
- * captures the parent shell PID, and appends one entry to the active-
- * sessions registry the extension watches.
+ * resolves the Claude process and its host-shell ancestors, and appends one
+ * entry to the active-sessions registry the extension watches.
  *
- * The extension matches `vscode.Terminal.processId === ppid` to swap the
- * row + detail action from Resume to View for the session running in
+ * The extension matches the terminal processId against ancestors above Claude
+ * and separately checks Claude liveness to show View for the session running in
  * that terminal. Stale entries are pruned by the host (no need for the
  * hook to clean up — CLI process exit doesn't get a SessionEnd we can
  * trust on every crash path).
@@ -17,11 +17,16 @@
  * every CLI boot.
  */
 import * as fs from "fs";
+import { writeFileAtomic } from "../../core/atomicWrite";
+import { findClaudeProcess, getProcessAncestors } from "./processTree";
 import { CLAUDE_MANAGER_DIR, SESSION_ACTIVE_FILE } from "../../core/config";
 
 interface ActiveEntry {
   sessionId: string;
   ppid: number;
+  terminalPids: number[];
+  claudePid: number;
+  claudeStartedAt?: number;
   cwd: string;
   transcriptPath: string;
   ts: number;
@@ -62,32 +67,27 @@ function s(v: unknown): string {
 }
 
 /**
- * Read the registry, drop any entry older than 24h or whose ppid no
- * longer maps to a live process, then append the new entry. The 24h
- * cutoff is a backstop — the extension prunes more aggressively at
- * read time.
+ * Keep live Claude entries, regardless of age, then append the new entry.
+ * A long-running client remains linked until it exits; the host also checks PID reuse.
  */
 function readRegistry(file: string): ActiveEntry[] {
   try {
     const raw = fs.readFileSync(file, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
     return parsed.filter((e): e is ActiveEntry => {
       if (!e || typeof e !== "object") return false;
       const id = (e as ActiveEntry).sessionId;
-      const ppid = (e as ActiveEntry).ppid;
+      const claudePid = (e as ActiveEntry).claudePid;
       const ts = (e as ActiveEntry).ts;
-      if (typeof id !== "string" || typeof ppid !== "number" || typeof ts !== "number") {
+      if (typeof id !== "string" || !Number.isSafeInteger(claudePid) || claudePid <= 0 || typeof ts !== "number") {
         return false;
       }
-      if (now - ts > dayMs) return false;
       try {
-        process.kill(ppid, 0);
+        process.kill(claudePid, 0);
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
       }
     });
   } catch {
@@ -102,6 +102,8 @@ async function main(): Promise<void> {
   const sessionId = s(payload.session_id);
   if (!sessionId) return;
 
+  const chain = findClaudeProcess(await getProcessAncestors(process.ppid));
+  if (!chain) return;
   const dir = CLAUDE_MANAGER_DIR;
   const file = SESSION_ACTIVE_FILE;
 
@@ -115,7 +117,10 @@ async function main(): Promise<void> {
   const withoutSession = entries.filter((e) => e.sessionId !== sessionId);
   const entry: ActiveEntry = {
     sessionId,
-    ppid: process.ppid,
+    ppid: chain.terminalPids[0],
+    terminalPids: chain.terminalPids,
+    claudePid: chain.claudePid,
+    claudeStartedAt: chain.claudeStartedAt,
     cwd: s(payload.cwd) || process.cwd(),
     transcriptPath: s(payload.transcript_path),
     ts: Date.now(),
@@ -123,7 +128,7 @@ async function main(): Promise<void> {
   withoutSession.push(entry);
 
   try {
-    fs.writeFileSync(file, JSON.stringify(withoutSession), "utf-8");
+    writeFileAtomic(file, JSON.stringify(withoutSession));
   } catch {
     /* swallow — never block CLI boot */
   }

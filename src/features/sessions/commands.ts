@@ -307,6 +307,15 @@ export async function resolveClaudeTarget(sess: Session | undefined): Promise<Re
   return "terminal";
 }
 
+/** Sibling checkouts of the current repository are runnable in their own cwd. */
+function sharesWorkspaceRepo(cwd: string, workspace: string): boolean {
+  if (!cwd || !workspace || normPath(cwd) === normPath(workspace)) return false;
+  const sessionTree = resolveWorktree(cwd);
+  const workspaceTree = resolveWorktree(workspace);
+  return Boolean(sessionTree?.exists && workspaceTree?.exists &&
+    normPath(sessionTree.repoRoot) === normPath(workspaceTree.repoRoot));
+}
+
 export const CONTINUE_TASK_PROMPT = "Continue the interrupted task from where you stopped. Check existing progress before repeating any actions.";
 
 /**
@@ -350,13 +359,15 @@ export async function resumeSession(
   // after Claude loads the transcript; no readiness timer types into the shell.
   const cmd = submitContinuation ? `${baseCommand} "${CONTINUE_TASK_PROMPT}"` : baseCommand;
   const ws = getWorkspace();
-  const differentProject = Boolean(ws && cwd && normPath(cwd) !== normPath(ws));
+  clearWorktreeCache();
+  const siblingCheckout = sharesWorkspaceRepo(cwd, ws);
+  const differentProject = Boolean(ws && cwd && normPath(cwd) !== normPath(ws) && !siblingCheckout);
 
   // Fork always uses the terminal — no extension equivalent. Resolve
   // the target up-front so we know whether a cross-workspace hop needs
   // to be paired with a delayed URI.
   const target: ResumeTarget =
-    fork || forceTerminal || submitContinuation ? "terminal" : await resolveClaudeTarget(sess);
+    fork || forceTerminal || submitContinuation || siblingCheckout ? "terminal" : await resolveClaudeTarget(sess);
 
   if (target === "cancel") return;
 
@@ -393,7 +404,7 @@ export async function resumeSession(
   // checkout/mismatch flow entirely and fall through to the router (which
   // resumes in place — createTerminal opens at cwd = the worktree path).
   if (!inLiveWorktree && sessBranch && sessBranch !== "HEAD") {
-    const currentBranch = getCurrentBranch();
+    const currentBranch = wt?.branch || getCurrentBranch(cwd || ws);
     if (currentBranch && currentBranch !== sessBranch) {
       // git refuses to check out a branch that is already live in another
       // worktree, so an in-place switch would fail. When the session's branch
@@ -493,7 +504,9 @@ export async function continueStoppedTask(sessionId: string, sessions: Session[]
       return;
     }
     const workspace = getWorkspace();
-    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath)) {
+    clearWorktreeCache();
+    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath) &&
+        !sharesWorkspaceRepo(session.projectPath, workspace)) {
       vscode.window.showInformationMessage("Open this session's project first, then choose Continue task there.");
       return;
     }
@@ -521,7 +534,9 @@ export async function resumeAfterAccountSwitch(sessionId: string, sessions: Sess
       return;
     }
     const workspace = getWorkspace();
-    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath)) {
+    clearWorktreeCache();
+    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath) &&
+        !sharesWorkspaceRepo(session.projectPath, workspace)) {
       vscode.window.showInformationMessage("Open this session's project first, then choose Resume after account switch there.");
       return;
     }

@@ -1,3 +1,4 @@
+// Modified for the personal fork, October 2026. See NOTICE.
 /**
  * Brain exporter — walks the user's Claude config + memory surfaces
  * and packages them into a single `.claudebrain.zip`. Session data,
@@ -10,6 +11,7 @@ import * as path from "path";
 import * as os from "os";
 import { CLAUDE_DIR } from "../../core/config";
 import { writeZip, type ZipEntry } from "./zip";
+import { GLOBAL_FILES, GLOBAL_DIRS, PROJECT_FILES, PROJECT_DIRS, resolveBrainPath, resolveUnlinkedPath, type BrainSection } from "./surfaces";
 
 export type BrainScope = "global" | "project" | "both";
 
@@ -21,44 +23,12 @@ export interface BrainManifest {
   sourcePlatform: NodeJS.Platform;
 }
 
-/**
- * Top-level entries inside the user's home that constitute the
- * "global brain" — files and directories we pull into the archive
- * when `scope` includes `global`.
- */
-const GLOBAL_FILES: string[] = [
-  "CLAUDE.md",
-  "settings.json",
-];
-const GLOBAL_DIRS: string[] = [
-  "skills",
-  "commands",
-  "agents",
-  "memory",
-];
-
-/**
- * Project (workspace) surfaces. All paths are relative to the
- * workspace root.
- */
-const PROJECT_FILES: string[] = [
-  "CLAUDE.md",
-  ".mcp.json",
-  ".claude/CLAUDE.md",
-  ".claude/settings.json",
-  ".claude/settings.local.json",
-];
-const PROJECT_DIRS: string[] = [
-  ".claude/skills",
-  ".claude/commands",
-  ".claude/agents",
-  ".claude/memory",
-];
-
 /** Recursively walk a directory, pushing each file's absolute path to `out`. */
 function walkFiles(dir: string, out: string[]): void {
   let entries: fs.Dirent[];
   try {
+    const info = fs.lstatSync(dir);
+    if (info.isSymbolicLink() || !info.isDirectory()) return;
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return;
@@ -76,7 +46,8 @@ function walkFiles(dir: string, out: string[]): void {
  * machine-specific state and should NOT end up in a shared brain.
  */
 function readGlobalMcpServers(): string | null {
-  const claudeJson = path.join(os.homedir(), ".claude.json");
+  const claudeJson = resolveUnlinkedPath(os.homedir(), ".claude.json");
+  if (!claudeJson) return null;
   try {
     const raw = fs.readFileSync(claudeJson, "utf-8");
     const parsed = JSON.parse(raw) as { mcpServers?: unknown };
@@ -87,10 +58,12 @@ function readGlobalMcpServers(): string | null {
   }
 }
 
-function addFile(entries: ZipEntry[], archivePath: string, absPath: string): void {
+function addFile(entries: ZipEntry[], section: BrainSection, root: string, relative: string): void {
+  const absPath = resolveBrainPath(section, root, relative);
+  if (!absPath) return;
   try {
     const data = fs.readFileSync(absPath);
-    entries.push({ path: archivePath, data });
+    entries.push({ path: `${section}/${relative}`, data });
   } catch {
     // Missing file — skip silently; manifest still reflects what was
     // attempted.
@@ -105,7 +78,7 @@ export function exportBrain(scope: BrainScope, workspacePath?: string): Buffer {
   if (scope === "global" || scope === "both") {
     sections.push("global");
     for (const f of GLOBAL_FILES) {
-      addFile(entries, `global/${f}`, path.join(CLAUDE_DIR, f));
+      addFile(entries, "global", CLAUDE_DIR, f);
     }
     for (const d of GLOBAL_DIRS) {
       const dirAbs = path.join(CLAUDE_DIR, d);
@@ -113,7 +86,7 @@ export function exportBrain(scope: BrainScope, workspacePath?: string): Buffer {
       walkFiles(dirAbs, files);
       for (const f of files) {
         const rel = path.relative(CLAUDE_DIR, f).split(path.sep).join("/");
-        addFile(entries, `global/${rel}`, f);
+        addFile(entries, "global", CLAUDE_DIR, rel);
       }
     }
     const mcp = readGlobalMcpServers();
@@ -128,7 +101,7 @@ export function exportBrain(scope: BrainScope, workspacePath?: string): Buffer {
   if ((scope === "project" || scope === "both") && workspacePath) {
     sections.push("project");
     for (const f of PROJECT_FILES) {
-      addFile(entries, `project/${f}`, path.join(workspacePath, f));
+      addFile(entries, "project", workspacePath, f);
     }
     for (const d of PROJECT_DIRS) {
       const dirAbs = path.join(workspacePath, d);
@@ -136,7 +109,7 @@ export function exportBrain(scope: BrainScope, workspacePath?: string): Buffer {
       walkFiles(dirAbs, files);
       for (const f of files) {
         const rel = path.relative(workspacePath, f).split(path.sep).join("/");
-        addFile(entries, `project/${rel}`, f);
+        addFile(entries, "project", workspacePath, rel);
       }
     }
   }

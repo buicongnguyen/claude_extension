@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.15.6 Personal] - 2026-10-01
+
+Account mutations now read fresh credentials and preserve recovery state on read errors. Lock heartbeats survive blocking operations and preserve replacement owners. Brain imports accept only portable settings surfaces and refuse linked paths or damaged live config. Global MCP edits serialize with account changes and authentication rejects unsafe names. Task continuation handles sibling worktrees, restored terminals, process ancestry and the selected workspace branch.
+
+See [review fixes and validation](docs/REVIEW-FIXES-2.15.6.md).
+
 ## [2.15.1] - 2026-09-20
 
 The sidebar's colours now hold up on every theme — row icons, chevrons and meta text were washed out on Dracula, Solarized Light and others, and the status chips were tuned for dark backgrounds only.

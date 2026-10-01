@@ -39,26 +39,26 @@ describe("brain importer", () => {
   it("writes new files into a fresh workspace", () => {
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/skill.md", data: Buffer.from("hello") },
+      { path: "project/.claude/skills/test/SKILL.md", data: Buffer.from("hello") },
     ]);
     const summary = importBrain(zip, tmp, ["project"]);
     expect(summary.written).toHaveLength(1);
     expect(summary.overwritten).toHaveLength(0);
     const written = fs.readFileSync(
-      path.join(tmp, ".claude", "skill.md"),
+      path.join(tmp, ".claude", "skills", "test", "SKILL.md"),
       "utf-8",
     );
     expect(written).toBe("hello");
   });
 
   it("overwrites existing files rather than writing .imported siblings", () => {
-    const target = path.join(tmp, ".claude", "skill.md");
+    const target = path.join(tmp, ".claude", "skills", "test", "SKILL.md");
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "old content");
 
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/skill.md", data: Buffer.from("new content") },
+      { path: "project/.claude/skills/test/SKILL.md", data: Buffer.from("new content") },
     ]);
     const summary = importBrain(zip, tmp, ["project"]);
 
@@ -71,13 +71,13 @@ describe("brain importer", () => {
   });
 
   it("treats byte-identical existing files as written, not overwritten", () => {
-    const target = path.join(tmp, ".claude", "skill.md");
+    const target = path.join(tmp, ".claude", "skills", "test", "SKILL.md");
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "same");
 
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/skill.md", data: Buffer.from("same") },
+      { path: "project/.claude/skills/test/SKILL.md", data: Buffer.from("same") },
     ]);
     const summary = importBrain(zip, tmp, ["project"]);
     expect(summary.overwritten).toHaveLength(0);
@@ -99,7 +99,7 @@ describe("brain importer", () => {
   it("ignores sections the caller did not pick", () => {
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/a.md", data: Buffer.from("x") },
+      { path: "project/.claude/agents/a.md", data: Buffer.from("x") },
     ]);
     const summary = importBrain(zip, tmp, []);
     expect(summary.written).toEqual([]);
@@ -109,21 +109,21 @@ describe("brain importer", () => {
   it("skips project entries when no workspace is supplied", () => {
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/a.md", data: Buffer.from("x") },
+      { path: "project/.claude/agents/a.md", data: Buffer.from("x") },
     ]);
     const summary = importBrain(zip, undefined, ["project"]);
-    expect(summary.skipped).toContain("project/.claude/a.md");
+    expect(summary.skipped).toContain("project/.claude/agents/a.md");
   });
 
   it("previewConflicts lists files that will be replaced and excludes new ones", () => {
-    const existing = path.join(tmp, ".claude", "old.md");
+    const existing = path.join(tmp, ".claude", "agents", "old.md");
     fs.mkdirSync(path.dirname(existing), { recursive: true });
     fs.writeFileSync(existing, "old");
 
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/old.md", data: Buffer.from("incoming") },
-      { path: "project/.claude/new.md", data: Buffer.from("brand new") },
+      { path: "project/.claude/agents/old.md", data: Buffer.from("incoming") },
+      { path: "project/.claude/agents/new.md", data: Buffer.from("brand new") },
     ]);
     const preview = previewConflicts(zip, tmp, ["project"]);
     expect(preview.overwrites).toEqual([existing]);
@@ -131,13 +131,13 @@ describe("brain importer", () => {
   });
 
   it("previewConflicts skips identical files (no replacement needed)", () => {
-    const target = path.join(tmp, ".claude", "x.md");
+    const target = path.join(tmp, ".claude", "agents", "x.md");
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "same");
 
     const zip = makeZip([
       manifestEntry(),
-      { path: "project/.claude/x.md", data: Buffer.from("same") },
+      { path: "project/.claude/agents/x.md", data: Buffer.from("same") },
     ]);
     const preview = previewConflicts(zip, tmp, ["project"]);
     expect(preview.overwrites).toEqual([]);

@@ -1,5 +1,17 @@
 # Personal fork verification
 
+## Version 2.15.6 — code and logic review fixes
+
+The twelve confirmed review issues and related regression findings are repaired. See [REVIEW-FIXES-2.15.6.md](REVIEW-FIXES-2.15.6.md) for the changes and [the validation summary](https://github.com/buicongnguyen/claude_extension/blob/main/docs/VALIDATION-2.15.6.json) for the failing file/test identities.
+
+- Final complete suite: **3,956 passed / 19 failed, 3,975 tests across 298 files**. A comparison of file and test names matches all 19 failures from the 2.15.5/upstream Windows baseline, with no new or missing failed identities. No tests were skipped to achieve this result.
+- Command: `npx vitest run --maxWorkers=2 --testTimeout=15000 --reporter=json`. The timeout allowance accommodates large Windows filesystem fixtures; the new lock and process integration cases keep their explicit bounds.
+- TypeScript, configured Biome (131 files), extension/webview/CSS builds and version 2.15.6 VSIX packaging/inspection passed. Installer runtime bundles match the verified build; private stores, account snapshots, tests and source maps are excluded.
+- Regression checks cover real temporary lock contenders and competing config writers, Windows junctions, a native Windows fake-CLI-to-hook subprocess chain, and mocked credential/Keychain and Linux/macOS process metadata.
+- Combined checks caught outdated atomic-write filesystem mocks and additional terminal lifecycle cases; their fixes are included in the final suite. Independent source review also checked account transactions, worker ownership/release, imports/MCP writes and terminal process generations.
+- No real Claude credentials, conversations or requests were used; the installer was not activated. Live server quota resets, real account transitions and real macOS Keychain interaction remain unverified.
+
+
 ## Version 2.15.5 — actual task continuation after reset
 
 The user's clarified case was a stopped task on the same account after its reset. Play formerly only opened history. It now requests explicit continuation in a terminal, while Open conversation retains history-only behavior. See [the post-reset review](POST-RESET-REVIEW.md).

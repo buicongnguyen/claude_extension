@@ -372,3 +372,125 @@ describe("terminalRegistry — execution lifetime", () => {
     reg.dispose();
   });
 });
+
+describe("terminalRegistry — restored and advisory generations", () => {
+  beforeEach(() => { vi.spyOn(process, "kill").mockReturnValue(true); });
+  afterEach(() => vi.restoreAllMocks());
+  it("clears a restored Claude binding when the start event predates activation", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    reg.register("restored", terminal);
+    const execution = { commandLine: { value: "claude --resume restored" } };
+    events.end({ terminal, execution });
+    expect(reg.has("restored")).toBe(false);
+    reg.register("restored", terminal); expect(reg.has("restored")).toBe(false);
+    reg.dispose();
+  });
+  it("does not clear a newer execution on a delayed restored completion", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    reg.register("restored", terminal);
+    const fresh = { commandLine: { value: "claude --resume restored" } };
+    events.start({ terminal, execution: fresh });
+    events.end({ terminal, execution: { commandLine: { value: "claude --resume restored" } } });
+    expect(reg.has("restored")).toBe(true);
+    events.end({ terminal, execution: fresh }); expect(reg.has("restored")).toBe(false); reg.dispose();
+  });
+  it("does not clear a newer live process on an old restored completion", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    reg.register("restored", terminal, { claudePid: 301, ts: Date.now() });
+    events.end({ terminal, execution: { commandLine: { value: "claude --resume restored" } } });
+    expect(reg.has("restored")).toBe(true); reg.dispose();
+  });
+  it("only advisory cleanup with the matching process generation removes a binding", () => {
+    const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    const old = { claudePid: 300, ts: Date.now() - 1000 };
+    const fresh = { claudePid: 301, ts: Date.now() };
+    reg.register("s1", terminal, old); reg.register("s1", terminal, fresh);
+    reg.unregister?.("s1", terminal, old); expect(reg.has("s1")).toBe(true);
+    reg.unregister?.("s1", terminal, fresh); expect(reg.has("s1")).toBe(false);
+    reg.register("s1", terminal, fresh); expect(reg.has("s1")).toBe(true); reg.dispose();
+  });
+  it("an old watcher cleanup cannot remove a newly observed Claude execution", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const old = { claudePid: 300, ts: Date.now() - 1000 };
+    events.start({ terminal, execution: { commandLine: { value: "claude --resume s1" } } });
+    reg.register("s1", terminal, old);
+    events.start({ terminal, execution: { commandLine: { value: "claude --resume s1" } } });
+    reg.register("s1", terminal, old); // A stale watcher snapshot arrives after Start.
+    reg.unregister?.("s1", terminal, old); expect(reg.has("s1")).toBe(true); reg.dispose();
+  });
+});
+
+describe("delayed shell events with genuine hook generations", () => {
+  beforeEach(() => { vi.spyOn(process, "kill").mockReturnValue(true); });
+  afterEach(() => vi.restoreAllMocks());
+  it("accepts a genuine live hook already written before the first Start is delivered", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const genuine = { claudePid: 301, ts: Date.now() - 5000 };
+    reg.register("s1", terminal, genuine);
+    events.start({ terminal, execution: { commandLine: { value: "claude --resume s1" } } });
+    reg.register("s1", terminal, genuine);
+    expect(reg.has("s1")).toBe(true);
+    reg.unregister?.("s1", terminal, genuine); expect(reg.has("s1")).toBe(false); reg.dispose();
+  });
+  it("accepts a genuine hook written before Start delivery but registered afterward", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const genuine = { claudePid: 301, ts: Date.now() - 5000 };
+    events.start({ terminal, execution: { commandLine: { value: "claude --resume s1" } } });
+    reg.register("s1", terminal, genuine); expect(reg.has("s1")).toBe(true); reg.dispose();
+  });
+  it("does not attach a changed live process to the pending old execution's End", () => {
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const first = { commandLine: { value: "claude --resume s1" } };
+    events.start({ terminal, execution: first });
+    reg.register("s1", terminal, { claudePid: 300, ts: Date.now() - 5000 });
+    const genuine = { claudePid: 301, ts: Date.now() - 1000 };
+    reg.register("s1", terminal, genuine); events.end({ terminal, execution: first });
+    expect(reg.has("s1")).toBe(true);
+    events.start({ terminal, execution: { commandLine: { value: "claude --resume s1" } } });
+    reg.register("s1", terminal, genuine); expect(reg.has("s1")).toBe(true); reg.dispose();
+  });
+});
+
+describe("delayed completion before hook discovery", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("allows a distinct live process whose hook predates delivery of the old End", () => {
+    const alive = new Set([300, 301]);
+    vi.spyOn(process, "kill").mockImplementation(((pid: number) => {
+      if (!alive.has(pid)) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      return true;
+    }) as typeof process.kill);
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const first = { commandLine: { value: "claude --resume s1" } };
+    events.start({ terminal, execution: first });
+    const old = { claudePid: 300, ts: Date.now() - 5000 };
+    reg.register("s1", terminal, old); alive.delete(300);
+    const genuine = { claudePid: 301, ts: Date.now() - 1000 };
+    events.end({ terminal, execution: first });
+    reg.register("s1", terminal, genuine); expect(reg.has("s1")).toBe(true);
+    reg.register("s1", terminal, old); reg.unregister?.("s1", terminal, old);
+    expect(reg.has("s1")).toBe(true); reg.dispose();
+  });
+});
+
+describe("hook discovery before a delayed replacement Start", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps a genuine live hook discovered while the prior shell execution is still current", () => {
+    const alive = new Set([301]);
+    vi.spyOn(process, "kill").mockImplementation(((pid: number) => {
+      if (!alive.has(pid)) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      return true;
+    }) as typeof process.kill);
+    const events = shellEvents(); const reg = createTerminalRegistry(); const terminal = fakeTerminal();
+    const first = { commandLine: { value: "claude --resume s1" } };
+    const fresh = { commandLine: { value: "claude --resume s1" } };
+    events.start({ terminal, execution: first });
+    const genuine = { claudePid: 301, ts: Date.now() - 1000 };
+    reg.register("s1", terminal, genuine); events.start({ terminal, execution: fresh });
+    reg.register("s1", terminal, genuine); events.end({ terminal, execution: first });
+    expect(reg.has("s1")).toBe(true);
+    alive.delete(301); events.end({ terminal, execution: fresh });
+    expect(reg.has("s1")).toBe(false); reg.dispose();
+  });
+});

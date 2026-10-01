@@ -75,6 +75,7 @@ afterEach(() => {
 // Import AFTER mocks.
 import {
   readCredentials,
+  readCredentialsStatus,
   readCredentialsRaceSafe,
   writeCredentials,
   hashCredentials,
@@ -518,5 +519,41 @@ describe("keychain read cache", () => {
     const spawnsAfterWrite = execFileMock.mock.calls.length;
     readCredentials();
     expect(execFileMock.mock.calls.length).toBeGreaterThan(spawnsAfterWrite);
+  });
+});
+
+
+describe("fresh credential status for mutations", () => {
+  const originalPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("bypasses a valid UI cache and sees the newly rotated Keychain payload", () => {
+    let current = SAMPLE_RAW;
+    execFileMock.mockImplementation(() => current);
+    readCredentials();
+    current = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-fresh-access" } });
+    expect(readCredentials()?.raw).toBe(SAMPLE_RAW);
+    expect(readCredentialsStatus({ fresh: true })).toMatchObject({ state: "ok", live: { raw: current } });
+  });
+
+  it("does not substitute a readable legacy service when the current item is denied", () => {
+    execFileMock.mockImplementation((_binary: string, args: string[]) => {
+      if (args.includes(__internals.KEYCHAIN_SERVICE)) throw makeStatusError(51);
+      return SAMPLE_RAW;
+    });
+    expect(readCredentialsStatus({ fresh: true })).toEqual({ state: "transient" });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mask a transient file read with a readable Keychain account", () => {
+    fs.writeFileSync(CREDENTIALS_PATH, "{synthetic incomplete JSON");
+    execFileMock.mockImplementation(() => SAMPLE_RAW);
+    expect(readCredentialsStatus({ fresh: true })).toEqual({ state: "transient" });
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });

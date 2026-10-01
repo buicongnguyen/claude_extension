@@ -10,14 +10,17 @@ const fsState = vi.hoisted(() => ({
   files: new Map<string, string>(),
   dirs: new Set<string>(),
   removed: [] as string[],
+  descriptors: new Map<number, string>(),
+  nextFd: 100,
 }));
 
 vi.mock("fs", () => {
-  const enoent = (): never => {
-    const err = new Error("ENOENT") as NodeJS.ErrnoException;
-    err.code = "ENOENT";
+  const fail = (code: string): never => {
+    const err = new Error(code) as NodeJS.ErrnoException;
+    err.code = code;
     throw err;
   };
+  const enoent = (): never => fail("ENOENT");
   return {
     mkdirSync: (p: string): void => {
       fsState.dirs.add(String(p));
@@ -34,8 +37,26 @@ vi.mock("fs", () => {
       if (v === undefined) enoent();
       return v!;
     },
-    writeFileSync: (p: string, data: string): void => {
-      fsState.files.set(String(p), String(data));
+    lstatSync: (p: string): { isFile: () => boolean; mode: number } => {
+      if (fsState.files.has(p)) return { isFile: () => true, mode: 0o600 };
+      if (fsState.dirs.has(p)) return { isFile: () => false, mode: 0o700 };
+      return enoent();
+    },
+    openSync: (p: string, flags: string): number => {
+      if (flags !== "wx") throw new Error(`Unsupported flags: ${flags}`);
+      if (fsState.files.has(p) || fsState.dirs.has(p)) fail("EEXIST");
+      const fd = fsState.nextFd++;
+      fsState.files.set(p, "");
+      fsState.descriptors.set(fd, p);
+      return fd;
+    },
+    writeFileSync: (p: string | number, data: string | Uint8Array): void => {
+      const target = typeof p === "number" ? fsState.descriptors.get(p) : String(p);
+      if (target === undefined) fail("EBADF");
+      fsState.files.set(target!, typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+    },
+    closeSync: (fd: number): void => {
+      if (!fsState.descriptors.delete(fd)) fail("EBADF");
     },
     renameSync: (from: string, to: string): void => {
       const v = fsState.files.get(String(from));
@@ -185,6 +206,8 @@ beforeEach(() => {
   fsState.files.clear();
   fsState.dirs.clear();
   fsState.removed = [];
+  fsState.descriptors.clear();
+  fsState.nextFd = 100;
   settings.calls = [];
   // Bundled tap source + node binary + workspace dir exist by default.
   fsState.files.set(TAP_SOURCE, "TAP-SOURCE-V1");

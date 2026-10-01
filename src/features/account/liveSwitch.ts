@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { getProfileDirectory, readProfileFile, writeProfileFile } from "./profileVault";
-import { readCredentials, writeCredentials, deleteCredentials, hashCredentials, defaultTargetSource, type CredentialsSource } from "./credentials";
+import { readCredentialsStatus, writeCredentials, deleteCredentials, hashCredentials, defaultTargetSource, type CredentialsSource } from "./credentials";
 import { clearClaudeJsonCache } from "./claudeJsonCache";
 import { withLocks, CREDENTIAL_LOCKS, CONFIG_LOCK, describeLockFailure } from "./claudeLocks";
 
@@ -45,8 +45,9 @@ export function recoverPendingSwitchUnlocked(): SwitchWriteResult {
         typeof entry.afterConfig !== "string" || typeof entry.afterCredentialsHash !== "string" ||
         !entry.source || !["file", "keychain-darwin"].includes(entry.source.kind) || typeof entry.source.locator !== "string") return recoveryError();
     const currentConfig = readConfig();
-    const current = readCredentials();
-    const currentHash = current?.hash ?? null;
+    const currentStatus = readCredentialsStatus({ fresh: true });
+    if (currentStatus.state === "transient") return recoveryError();
+    const currentHash = currentStatus.state === "ok" ? currentStatus.live.hash : null;
     const oldHash = entry.beforeCredentials === null ? null : hashCredentials(entry.beforeCredentials);
     const configBefore = currentConfig === entry.beforeConfig;
     const configAfter = currentConfig === entry.afterConfig;
@@ -66,7 +67,10 @@ export function recoverPendingSwitchUnlocked(): SwitchWriteResult {
         const restored = entry.beforeCredentials === null ? deleteCredentials(entry.source) : writeCredentials(entry.beforeCredentials, entry.source);
         if (!restored) return recoveryError();
       }
-      if (readConfig() !== entry.beforeConfig || (readCredentials()?.hash ?? null) !== oldHash) return recoveryError();
+      const restoredStatus = readCredentialsStatus({ fresh: true });
+      if (restoredStatus.state === "transient") return recoveryError();
+      const restoredHash = restoredStatus.state === "ok" ? restoredStatus.live.hash : null;
+      if (readConfig() !== entry.beforeConfig || restoredHash !== oldHash) return recoveryError();
     }
     // Recovery data is removed only after a verified, consistent result.
     fs.rmSync(SWITCH_BACKUP, { force: true });
@@ -89,7 +93,10 @@ export function writeLiveAccount(afterConfig: string, credentials: string): Swit
   if (fs.existsSync(SWITCH_BACKUP)) return recoveryError();
   try {
     const beforeConfig = readConfig();
-    const before = readCredentials();
+    const beforeStatus = readCredentialsStatus({ fresh: true });
+    if (beforeStatus.state === "transient") return { ok: false, error: "copy-failed", detail:
+      "Claude's current credentials could not be read. No login files were changed. Unlock its credential store or retry after login finishes." };
+    const before = beforeStatus.state === "ok" ? beforeStatus.live : null;
     const source = before?.source ?? defaultTargetSource();
     const entry: Journal = { version: 1, beforeConfig, beforeCredentials: before?.raw ?? null,
       afterConfig, afterCredentialsHash: hashCredentials(credentials), source };

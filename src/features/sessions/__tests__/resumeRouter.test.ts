@@ -82,7 +82,7 @@ function mockBranch(branch: string): void {
         isActive: true,
         exports: {
           getAPI: () => ({
-            repositories: [{ state: { HEAD: { name: branch } } }],
+            repositories: [{ rootUri: { fsPath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "" }, state: { HEAD: { name: branch } } }],
           }),
         },
       } as never;

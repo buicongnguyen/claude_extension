@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -41,6 +42,14 @@ describe("withLocks", () => {
     expect(result).toEqual({ ok: true, value: "done" });
     expect(fs.existsSync(a.dir)).toBe(false);
   });
+
+  it("acknowledges multiple locks without losing worker wakeups", () => {
+    const specs = [lock("a.lock"), lock("b.lock"), lock("c.lock")];
+    for (let iteration = 0; iteration < 8; iteration++) {
+      expect(withLocks(specs, () => iteration)).toEqual({ ok: true, value: iteration });
+      for (const spec of specs) expect(fs.existsSync(spec.dir)).toBe(false);
+    }
+  }, 20_000);
 
   it("releases the lock when the work throws, and lets the error out", () => {
     const a = lock("a.lock");
@@ -134,16 +143,59 @@ describe("withLocks", () => {
     }
   });
 
-  it("keeps the lock fresh while long work runs", async () => {
-    const a = lock("a.lock", 60_000);
-    let observed = 0;
-    withLocks([a], () => {
-      observed = fs.statSync(a.dir).mtimeMs;
-      return null;
+  it("keeps a blocking writer fresh against a separate process", async () => {
+    const a = lock("a.lock", 1_200);
+    const ready = path.join(dir, "peer-ready");
+    const report = path.join(dir, "peer-report.json");
+    let finished: Promise<number | null> | undefined;
+    const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    const result = withLocks([a], () => {
+      const peer = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+        const fs = require("fs");
+        const [lock, ready, report] = process.argv.slice(1);
+        fs.writeFileSync(ready, "ready");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1800);
+        const age = Date.now() - fs.statSync(lock).mtimeMs;
+        const stale = age >= 1200;
+        if (stale) { fs.rmdirSync(lock); fs.mkdirSync(lock); }
+        fs.writeFileSync(report, JSON.stringify({ stale, age }));
+      `,
+          a.dir,
+          ready,
+          report,
+        ],
+        { stdio: "ignore", windowsHide: true },
+      );
+      finished = new Promise((resolve, reject) => {
+        peer.once("exit", resolve);
+        peer.once("error", reject);
+      });
+      const deadline = Date.now() + 5_000;
+      while (!fs.existsSync(ready) && Date.now() < deadline) pause(20);
+      expect(fs.existsSync(ready)).toBe(true);
+      pause(3_000);
+      return "protected";
     });
-    // The heartbeat only matters over seconds; assert it is wired rather than
-    // sleeping for one: the directory existed with a fresh mtime during work.
-    expect(Date.now() - observed).toBeLessThan(5_000);
+    expect(await finished).toBe(0);
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).stale).toBe(false);
+    expect(result).toEqual({ ok: true, value: "protected" });
+    expect(fs.existsSync(a.dir)).toBe(false);
+  }, 20_000);
+
+  it("does not remove a replacement lock owned by another writer", () => {
+    const a = lock("a.lock");
+    const result = withLocks([a], () => {
+      fs.renameSync(a.dir, path.join(dir, "old-generation.lock"));
+      fs.mkdirSync(a.dir);
+      return "replaced";
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.reason).toBe("unavailable");
+    expect(fs.existsSync(a.dir)).toBe(true);
   });
 
   it("serialises two writers: the second cannot enter while the first holds", () => {

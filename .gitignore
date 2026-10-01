@@ -36,3 +36,4 @@ scripts/_mock-tmp/
 docs/review/*.log
 # Publish only the reviewed installer on the download page.
 !site/downloads/claude-manager-personal-2.15.5.vsix
+!site/downloads/claude-manager-personal-2.15.6.vsix

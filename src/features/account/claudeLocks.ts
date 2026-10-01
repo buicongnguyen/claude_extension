@@ -1,226 +1,145 @@
-/**
- * Cooperate with Claude Code's own advisory locks while we rewrite the files
- * it owns.
- *
- * The race this closes is real and silent. Claude Code refreshes its OAuth
- * token by reading the credentials, refreshing over the network, and saving
- * the result — and the whole sequence runs under its locks. A profile switch
- * that lands inside that window is overwritten by the refreshed token for the
- * account we just left: the user ends up back on the old account, and the
- * backup we took a moment earlier holds a refresh token the server has already
- * rotated away, which makes that saved profile unusable later.
- *
- * Writing atomically does not help. Our `tmp+rename` guarantees nobody sees a
- * half-written file; it does not stop Claude Code from writing *after* us with
- * data it read *before* us. Only taking the same locks orders the two writers.
- *
- * The protocol is Claude Code's, observed from its own behaviour:
- *   - The lock is a DIRECTORY. `mkdir` is the mutex — it either creates or
- *     fails with EEXIST, atomically, on every platform we support.
- *   - A holder proves it is alive by touching the directory's mtime. A lock
- *     whose mtime is older than its stale window is abandoned and may be
- *     reclaimed, which is what stops a crashed process from wedging the file
- *     forever.
- *   - The credential path takes two locks, primary then legacy, and the
- *     config file has its own.
- *
- * Where we deliberately differ from a straight port: acquisition is bounded
- * and reports WHY it failed instead of pressing on. A swap that cannot take
- * the lock is a swap that would race, so the caller is told to ask the user to
- * retry rather than quietly corrupting a profile. Being unable to switch for a
- * few seconds is recoverable; losing a refresh token is not.
- */
+/** Coordinate live writes with Claude's directory locks, without blocking their heartbeat. */
 import * as fs from "fs";
 import * as path from "path";
 import { CLAUDE_DIR } from "../../core/config";
+import {
+  createLockHeartbeat,
+  lockIdentity,
+  type LockHeartbeat,
+  type OwnedLock,
+} from "./lockHeartbeat";
 
-/**
- * Every lock path derives from CLAUDE_DIR rather than from `os.homedir()`
- * directly, so a test that redirects the config module also redirects the
- * locks. Deriving them independently would have unit tests creating lock
- * directories in the developer's real home and racing their actual Claude
- * Code.
- *
- * Claude Code's config file is a sibling of its config directory
- * (`~/.claude` and `~/.claude.json`), and the legacy credential lock is that
- * directory's name plus `.lock`.
- */
-const CLAUDE_JSON = `${CLAUDE_DIR}.json`;
-
-/**
- * One advisory lock: where it lives, and how long before a holder is presumed
- * dead. The stale windows differ per lock because Claude Code chose different
- * ones — the credential locks guard a network round-trip and tolerate a
- * minute, the config lock guards a local write and does not.
- */
 export interface LockSpec {
   readonly dir: string;
   readonly staleMs: number;
 }
 
-/**
- * Credential locks, in the order Claude Code takes them. Order matters: two
- * processes taking the same pair in opposite orders deadlock, so this array is
- * the acquisition order and release runs in reverse.
- */
 export const CREDENTIAL_LOCKS: readonly LockSpec[] = [
   { dir: path.join(CLAUDE_DIR, ".oauth_refresh.lock"), staleMs: 60_000 },
-  // Legacy sibling of the config directory (~/.claude.lock), kept by Claude
-  // Code for compatibility with external tools — which is exactly what we are.
   { dir: `${CLAUDE_DIR}.lock`, staleMs: 60_000 },
 ];
-
-/** Lock guarding `~/.claude.json`. Shorter window: no network call under it. */
-export const CONFIG_LOCK: LockSpec = {
-  dir: `${CLAUDE_JSON}.lock`,
-  staleMs: 10_000,
-};
-
-/** How often a holder touches the lock to prove it is still alive. */
-const HEARTBEAT_MS = 5_000;
-/** How long to wait for a lock before giving up. */
+export const CONFIG_LOCK: LockSpec = { dir: `${CLAUDE_DIR}.json.lock`, staleMs: 10_000 };
 const ACQUIRE_TIMEOUT_MS = 3_000;
-/** Gap between acquisition attempts. */
 const RETRY_INTERVAL_MS = 120;
-
 export type LockFailure =
-  /** Held by a live holder for the whole timeout — almost always a refresh. */
   | { reason: "busy"; lock: string }
-  /** The lock directory could not be created for a non-contention reason. */
   | { reason: "unavailable"; lock: string; detail: string };
 
-function mtimeMs(dir: string): number | null {
+type AcquireResult =
+  | { kind: "taken"; owned: OwnedLock }
+  | { kind: "held" }
+  | { kind: "error"; detail: string };
+function tryAcquire(spec: LockSpec): AcquireResult {
+  const take = (): AcquireResult => {
+    fs.mkdirSync(spec.dir, { mode: 0o700 });
+    const identity = lockIdentity(spec.dir);
+    if (!identity) return { kind: "error", detail: "Could not verify the new credential lock." };
+    return { kind: "taken", owned: { ...spec, identity } };
+  };
   try {
-    return fs.statSync(dir).mtimeMs;
-  } catch {
-    return null;
+    return take();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      return { kind: "error", detail: (error as Error).message };
   }
-}
-
-/**
- * Try once to take `spec`.
- *
- * Returns "taken", "held" (someone alive has it), or an error. A lock whose
- * mtime has aged past its stale window is reclaimed by removing it and
- * retrying the create — the removal is guarded so that losing the race to
- * another reclaimer reads as "held" rather than as success.
- */
-function tryAcquire(spec: LockSpec): "taken" | "held" | { detail: string } {
+  const identity = lockIdentity(spec.dir);
+  if (!identity) return { kind: "held" };
   try {
-    fs.mkdirSync(spec.dir);
-    return "taken";
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST") {
-      return { detail: (err as Error).message };
-    }
-  }
-
-  const age = mtimeMs(spec.dir);
-  // Vanished between mkdir and stat: the holder released it. Say "held" so the
-  // caller retries through the normal path rather than special-casing a race.
-  if (age === null) return "held";
-  if (Date.now() - age < spec.staleMs) return "held";
-
-  try {
+    if (Date.now() - fs.statSync(spec.dir).mtimeMs < spec.staleMs) return { kind: "held" };
+    // Recheck both generation and freshness before reclaiming a dead holder.
+    if (
+      lockIdentity(spec.dir) !== identity ||
+      Date.now() - fs.statSync(spec.dir).mtimeMs < spec.staleMs
+    )
+      return { kind: "held" };
     fs.rmdirSync(spec.dir);
+    return take();
   } catch {
-    // Another process reclaimed it first, or it is no longer empty. Either way
-    // it is not ours to take on this attempt.
-    return "held";
-  }
-  try {
-    fs.mkdirSync(spec.dir);
-    return "taken";
-  } catch {
-    return "held";
+    return { kind: "held" };
   }
 }
 
-/**
- * Hold `specs` for the duration of `work`, then release them.
- *
- * Locks are taken in array order and released in reverse. If any lock cannot
- * be taken, every lock already held is released before returning, so a failed
- * acquisition never leaves a partial set behind for the stale timer to clean
- * up.
- *
- * `work` runs only when every lock is held. Its result is returned as-is; a
- * throw propagates after the locks are released.
- */
+/** The callback is synchronous; a separate worker keeps all held locks fresh. */
 export function withLocks<T>(
   specs: readonly LockSpec[],
   work: () => T,
 ): { ok: true; value: T } | { ok: false; failure: LockFailure } {
-  const held: LockSpec[] = [];
-  const heartbeats: ReturnType<typeof setInterval>[] = [];
-
-  const releaseAll = (): void => {
-    for (const timer of heartbeats.splice(0)) clearInterval(timer);
-    // Reverse order: the mirror of acquisition, so a watcher never sees us
-    // holding the legacy lock without the primary.
-    for (const spec of held.splice(0).reverse()) {
+  const held: OwnedLock[] = [];
+  let heartbeat: LockHeartbeat | undefined;
+  const releaseAll = (): boolean => {
+    // Wait for heartbeat shutdown before releasing; an unconfirmed stop leaves
+    // the locks intact for normal stale recovery rather than racing a late touch.
+    const stopped = heartbeat?.stop() ?? true;
+    heartbeat = undefined;
+    for (const lock of held.splice(0).reverse()) {
+      if (!stopped || lockIdentity(lock.dir) !== lock.identity) continue;
       try {
-        fs.rmdirSync(spec.dir);
+        fs.rmdirSync(lock.dir);
       } catch {
-        // Already gone (reclaimed as stale while we were slow). Nothing to do:
-        // the work is finished either way.
+        /* Never delete another holder or a nonempty directory. */
       }
     }
+    return stopped;
   };
-
+  const unavailable = (lock: string, detail: string): { ok: false; failure: LockFailure } => {
+    releaseAll();
+    return { ok: false, failure: { reason: "unavailable", lock, detail } };
+  };
   for (const spec of specs) {
     const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
-    let taken = false;
-
+    let owned: OwnedLock | undefined;
     for (;;) {
       const result = tryAcquire(spec);
-      if (result === "taken") {
-        taken = true;
+      if (result.kind === "taken") {
+        owned = result.owned;
         break;
       }
-      if (typeof result === "object") {
-        releaseAll();
-        return { ok: false, failure: { reason: "unavailable", lock: spec.dir, detail: result.detail } };
-      }
+      if (result.kind === "error") return unavailable(spec.dir, result.detail);
       if (Date.now() >= deadline) break;
-      // Synchronous wait: this whole path runs inside one host-side command and
-      // must stay ordered relative to the file writes it guards. A promise here
-      // would let the extension host interleave another swap between our
-      // acquisition and our write, which is the race we are closing.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_INTERVAL_MS);
     }
-
-    if (!taken) {
+    if (!owned) {
       releaseAll();
       return { ok: false, failure: { reason: "busy", lock: spec.dir } };
     }
-
-    held.push(spec);
-    // Keep proving we are alive. A Keychain write can outlast the config
-    // lock's 10s window, and a lock we let go stale could be reclaimed by
-    // Claude Code mid-write — the exact interleaving we are here to prevent.
-    const timer = setInterval(() => {
-      const now = new Date();
-      try {
-        fs.utimesSync(spec.dir, now, now);
-      } catch {
-        // The directory is gone; the interval is cleared on release anyway.
-      }
-    }, HEARTBEAT_MS);
-    // Never hold the event loop open for a lock heartbeat.
-    timer.unref?.();
-    heartbeats.push(timer);
+    held.push(owned);
+    try {
+      heartbeat ??= createLockHeartbeat();
+      if (!heartbeat.add(owned))
+        return unavailable(
+          spec.dir,
+          "The credential lock heartbeat could not be started. Retry the operation.",
+        );
+    } catch {
+      return unavailable(
+        spec.dir,
+        "The credential lock heartbeat is unavailable. Retry the operation.",
+      );
+    }
   }
-
   try {
-    return { ok: true, value: work() };
-  } finally {
+    const value = work();
+    const healthy =
+      (!heartbeat || heartbeat.healthy()) &&
+      held.every((lock) => lockIdentity(lock.dir) === lock.identity);
+    const lock = held[0]?.dir ?? "";
+    const stopped = releaseAll();
+    if (!healthy || !stopped)
+      return {
+        ok: false,
+        failure: {
+          reason: "unavailable",
+          lock,
+          detail: "Credential lock ownership was lost. Verify the active account before retrying.",
+        },
+      };
+    return { ok: true, value };
+  } catch (error) {
     releaseAll();
+    throw error;
   }
 }
 
-/** Human-readable reason, for surfacing a retry to the user. */
 export function describeLockFailure(failure: LockFailure): string {
   return failure.reason === "busy"
     ? "Claude Code is refreshing its credentials right now. Try again in a moment."

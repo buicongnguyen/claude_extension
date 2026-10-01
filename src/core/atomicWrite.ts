@@ -1,26 +1,33 @@
-/**
- * Atomic file write: write to a sibling temp file, then rename it over the
- * target. `rename` is atomic on the same filesystem, so a crash or power loss
- * can never leave the target half-written — a reader sees either the old file
- * or the new one, never a truncated mix.
- *
- * This matters because the files we mutate (settings.json, ~/.claude.json,
- * .mcp.json) are also read by Claude Code itself; a partial write would
- * corrupt the user's config. Throws on failure (and removes the temp file);
- * callers that want a boolean wrap it in try/catch.
- */
+// Modified for the personal fork, October 2026. See NOTICE.
+/** Write to an exclusively created random sibling, then rename over the target. */
 import * as fs from "fs";
+import { randomUUID } from "crypto";
 
 export function writeFileAtomic(filePath: string, data: string | Uint8Array): void {
-  const tmp = `${filePath}.csm-tmp`;
+  const tmp = `${filePath}.csm-tmp-${randomUUID()}`;
+  let mode = 0o600;
   try {
-    fs.writeFileSync(tmp, data);
+    const existing = fs.lstatSync(filePath);
+    if (existing.isFile()) mode = existing.mode & 0o777;
+  } catch {
+    // A new file is private by default; an unreadable target still fails at rename.
+  }
+  let fd: number | undefined;
+  let created = false;
+  try {
+    fd = fs.openSync(tmp, "wx", mode);
+    created = true;
+    fs.writeFileSync(fd, data);
+    fs.closeSync(fd);
+    fd = undefined;
     fs.renameSync(tmp, filePath);
   } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      // temp file may not exist — nothing to clean up
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* preserve the write error */ }
+    }
+    // Never remove a file we did not create if exclusive creation failed.
+    if (created) {
+      try { fs.unlinkSync(tmp); } catch { /* preserve the write error */ }
     }
     throw err;
   }

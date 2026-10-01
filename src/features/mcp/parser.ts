@@ -1,3 +1,4 @@
+// Modified for the personal fork, October 2026. See NOTICE.
 /**
  * MCP server parsing — reads MCP server configurations from project-level
  * .mcp.json and global ~/.claude/mcp.json files.
@@ -8,6 +9,8 @@ import * as path from "path";
 import * as os from "os";
 import { MCP_AUTH_CACHE_FILE, claudeSettingsPath } from "../../core/config";
 import { writeFileAtomic } from "../../core/atomicWrite";
+import { CONFIG_LOCK, withLocks, describeLockFailure, type LockFailure } from "../account/claudeLocks";
+import { isMcpCliName, MCP_NAME_ERROR } from "../../shared/mcpNames";
 import { createMtimeCache } from "../../core/mtimeCache";
 import { loadActivePlugins, findPluginMcpFile, type ActivePlugin } from "../../core/plugins";
 import type { McpServerInput } from "../../shared/protocol/messages";
@@ -72,7 +75,7 @@ export function globalMcpFileFor(name: string): string {
     const cfg = JSON.parse(fs.readFileSync(CLAUDE_JSON_FILE, "utf-8")) as {
       mcpServers?: Record<string, unknown>;
     };
-    if (cfg.mcpServers && name in cfg.mcpServers) return CLAUDE_JSON_FILE;
+    if (cfg.mcpServers && Object.hasOwn(cfg.mcpServers, name)) return CLAUDE_JSON_FILE;
   } catch {
     // unreadable/absent — fall through to legacy
   }
@@ -546,32 +549,22 @@ export function setProjectMcpServerDisabled(
  * @param workspacePath - Workspace path (needed for project scope)
  * @returns true if the write succeeded
  */
-export function deleteMcpServer(
+function deleteMcpServerUnlocked(
   name: string,
   scope: McpServerScope,
   workspacePath?: string,
 ): boolean {
   if (scope === "plugin") return false;
+  if (scope === "project" && !workspacePath) return false;
   const filePath = scope === "project" && workspacePath
     ? path.join(workspacePath, ".mcp.json")
     : globalMcpFileFor(name);
 
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return false;
-  }
-
-  let config: Record<string, unknown>;
-  try {
-    config = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return false;
-  }
+  const { raw, config, malformed } = readConfig(filePath);
+  if (malformed) return false;
 
   const servers = config.mcpServers as Record<string, unknown> | undefined;
-  if (!servers || !(name in servers)) return false;
+  if (!servers || !Object.hasOwn(servers, name)) return false;
 
   delete servers[name];
 
@@ -621,14 +614,18 @@ function readConfig(filePath: string): {
   let raw = "";
   try {
     raw = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return { raw: "", config: {}, malformed: false };
+  } catch (err) {
+    return { raw: "", config: {}, malformed: (err as NodeJS.ErrnoException).code !== "ENOENT" };
   }
-  if (raw.trim() === "") return { raw, config: {}, malformed: false };
+  if (raw.trim() === "") return { raw, config: {}, malformed: filePath === CLAUDE_JSON_FILE };
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { raw, config: parsed as Record<string, unknown>, malformed: false };
+      const record = parsed as Record<string, unknown>;
+      if (record.mcpServers !== undefined && (!record.mcpServers || typeof record.mcpServers !== "object" || Array.isArray(record.mcpServers))) {
+        return { raw, config: {}, malformed: true };
+      }
+      return { raw, config: record, malformed: false };
     }
   } catch {
     return { raw, config: {}, malformed: true };
@@ -650,20 +647,19 @@ export interface McpWriteResult {
  * Add a new MCP server to the target scope's config file (creating the
  * file if needed). Rejects a duplicate name in that file.
  */
-export function addMcpServer(input: McpServerInput, workspacePath?: string): McpWriteResult {
-  if (!input.name.trim()) return { ok: false, error: "Server name is required." };
-  const filePath = serverConfigFile(input.scope, input.name, workspacePath);
+function addMcpServerUnlocked(input: McpServerInput, workspacePath?: string): McpWriteResult {
+  if (!isMcpCliName(input.name)) return { ok: false, error: MCP_NAME_ERROR };
+  const filePath = input.scope === "global" ? CLAUDE_JSON_FILE : serverConfigFile(input.scope, input.name, workspacePath);
   if (!filePath) {
     return { ok: false, error: `Cannot write to ${input.scope} scope without a workspace.` };
   }
   const { raw, config, malformed } = readConfig(filePath);
   if (malformed) return { ok: false, error: malformedConfigError(filePath) };
   const servers = (config.mcpServers as Record<string, unknown>) ?? {};
-  if (input.name in servers) {
+  if (Object.hasOwn(servers, input.name)) {
     return { ok: false, error: `An MCP server named "${input.name}" already exists in ${input.scope} scope.` };
   }
-  servers[input.name] = buildServerEntry(input);
-  config.mcpServers = servers;
+  config.mcpServers = { ...servers, [input.name]: buildServerEntry(input) };
   // A brand-new file (no prior newline-indented content) should still be
   // pretty-printed; seed the indent hint so writeMcpConfig formats it.
   const indentHint = raw || '{\n  "mcpServers": {}\n}';
@@ -677,12 +673,12 @@ export function addMcpServer(input: McpServerInput, workspacePath?: string): Mcp
  * old key, writes the new). Identified by `originalName` within the
  * server's scope.
  */
-export function updateMcpServer(
+function updateMcpServerUnlocked(
   originalName: string,
   input: McpServerInput,
   workspacePath?: string,
 ): McpWriteResult {
-  if (!input.name.trim()) return { ok: false, error: "Server name is required." };
+  if (!isMcpCliName(input.name)) return { ok: false, error: MCP_NAME_ERROR };
   const filePath = serverConfigFile(input.scope, originalName, workspacePath);
   if (!filePath) {
     return { ok: false, error: `Cannot write to ${input.scope} scope without a workspace.` };
@@ -690,15 +686,39 @@ export function updateMcpServer(
   const { raw, config, malformed } = readConfig(filePath);
   if (malformed) return { ok: false, error: malformedConfigError(filePath) };
   const servers = config.mcpServers as Record<string, unknown> | undefined;
-  if (!servers || !(originalName in servers)) {
+  if (!servers || !Object.hasOwn(servers, originalName)) {
     return { ok: false, error: `Server "${originalName}" was not found — it may have been edited on disk.` };
   }
-  if (input.name !== originalName && input.name in servers) {
+  if (input.name !== originalName && Object.hasOwn(servers, input.name)) {
     return { ok: false, error: `An MCP server named "${input.name}" already exists.` };
   }
-  delete servers[originalName];
-  servers[input.name] = buildServerEntry(input);
+  const renamed = { ...servers };
+  delete renamed[originalName];
+  config.mcpServers = { ...renamed, [input.name]: buildServerEntry(input) };
   return writeMcpConfig(filePath, config, raw)
     ? { ok: true }
     : { ok: false, error: "Failed to write MCP config." };
+}
+
+/** Lock before target resolution and reading: account switches and CLI writes share this config. */
+function withGlobalConfigLock<T>(scope: string, work: () => T, refused: (failure: LockFailure) => T): T {
+  if (scope !== "global") return work();
+  const result = withLocks([CONFIG_LOCK], work);
+  return result.ok ? result.value : refused(result.failure);
+}
+
+export function deleteMcpServer(name: string, scope: McpServerScope, workspacePath?: string): boolean {
+  return withGlobalConfigLock(scope, () => deleteMcpServerUnlocked(name, scope, workspacePath), () => false);
+}
+
+export function addMcpServer(input: McpServerInput, workspacePath?: string): McpWriteResult {
+  if (!isMcpCliName(input.name)) return { ok: false, error: MCP_NAME_ERROR };
+  return withGlobalConfigLock(input.scope, () => addMcpServerUnlocked(input, workspacePath),
+    (failure) => ({ ok: false, error: describeLockFailure(failure) }));
+}
+
+export function updateMcpServer(originalName: string, input: McpServerInput, workspacePath?: string): McpWriteResult {
+  if (!isMcpCliName(input.name)) return { ok: false, error: MCP_NAME_ERROR };
+  return withGlobalConfigLock(input.scope, () => updateMcpServerUnlocked(originalName, input, workspacePath),
+    (failure) => ({ ok: false, error: describeLockFailure(failure) }));
 }

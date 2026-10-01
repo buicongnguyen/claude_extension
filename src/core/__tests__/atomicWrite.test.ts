@@ -46,4 +46,26 @@ describe("writeFileAtomic", () => {
     expect(() => writeFileAtomic(target, "x")).toThrow();
     expect(fs.existsSync(`${target}.csm-tmp`)).toBe(false);
   });
+  it("does not overwrite a pre-existing predictable temp file", () => {
+    const target = tmpTarget("planted-temp");
+    const planted = `${target}.csm-tmp`;
+    fs.writeFileSync(planted, "outside sentinel");
+    writeFileAtomic(target, "safe replacement");
+    expect(fs.readFileSync(target, "utf8")).toBe("safe replacement");
+    expect(fs.readFileSync(planted, "utf8")).toBe("outside sentinel");
+    expect(fs.readdirSync(path.dirname(target)).filter((file) => file.startsWith(`${path.basename(target)}.csm-tmp-`))).toEqual([]);
+  });
+
+  it("cleans its random temp file if replacing the destination fails", () => {
+    const target = tmpTarget("rename-failure");
+    fs.mkdirSync(target);
+    try {
+      expect(() => writeFileAtomic(target, "must fail")).toThrow();
+      expect(fs.statSync(target).isDirectory()).toBe(true);
+      expect(fs.readdirSync(path.dirname(target)).filter((file) => file.startsWith(`${path.basename(target)}.csm-tmp-`))).toEqual([]);
+    } finally {
+      fs.rmdirSync(target);
+    }
+  });
+
 });

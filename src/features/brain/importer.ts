@@ -1,3 +1,4 @@
+// Modified for the personal fork, October 2026. See NOTICE.
 /**
  * Brain importer — unpacks a `.claudebrain.zip` written by exporter.ts
  * back onto disk. Caller confirms the destructive replace; existing
@@ -14,6 +15,9 @@ import * as os from "os";
 import { CLAUDE_DIR } from "../../core/config";
 import { readZip, type ZipEntry } from "./zip";
 import type { BrainManifest } from "./exporter";
+import { resolveBrainPath, resolveUnlinkedPath } from "./surfaces";
+import { writeFileAtomic } from "../../core/atomicWrite";
+import { CONFIG_LOCK, withLocks, describeLockFailure } from "../account/claudeLocks";
 
 export interface ImportSummary {
   /** Files written to a path that didn't exist before. */
@@ -33,19 +37,6 @@ export interface ConflictPreview {
   overwrites: string[];
   /** mcpServers entry names already present in ~/.claude.json. */
   mcpReplacements: string[];
-}
-
-/**
- * Guard against path-traversal: incoming paths like `../../etc/passwd`
- * must never write outside the target root. Returns the joined
- * absolute path when safe, or null when the path escapes.
- */
-function safeJoin(root: string, rel: string): string | null {
-  const joined = path.resolve(root, rel);
-  const rootResolved = path.resolve(root) + path.sep;
-  if (joined === path.resolve(root)) return null;
-  if (!(joined + path.sep).startsWith(rootResolved)) return null;
-  return joined;
 }
 
 /**
@@ -70,42 +61,58 @@ function writeFileReplacing(
     } catch {
       // unreadable — fall through and overwrite
     }
-    fs.writeFileSync(absPath, data);
+    writeFileAtomic(absPath, data);
     summary.overwritten.push(absPath);
     return;
   }
-  fs.writeFileSync(absPath, data);
+  writeFileAtomic(absPath, data);
   summary.written.push(absPath);
 }
 
-/** Merge incoming mcpServers entries into ~/.claude.json, replacing same-named entries. */
-function mergeMcpServers(raw: string, summary: ImportSummary): void {
-  let incoming: { mcpServers?: Record<string, unknown> };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Missing config is safe to create; every unreadable or malformed existing file is preserved. */
+function readLiveConfig(target: string): Record<string, unknown> {
+  let raw: string;
   try {
-    incoming = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
-  } catch {
+    raw = fs.readFileSync(target, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`${target} could not be read, so it was left untouched.`);
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (isRecord(parsed) && (parsed.mcpServers === undefined || isRecord(parsed.mcpServers))) return parsed;
+  } catch { /* report the same refusal for any invalid existing config */ }
+  throw new Error(`${target} isn't a valid config object, so it was left untouched. Fix or restore it before importing.`);
+}
+
+function incomingMcpServers(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers : null;
+  } catch { return null; }
+}
+
+/** Hold Claude's config lock across the complete read-modify-write, preserving account changes. */
+function mergeMcpServers(raw: string, summary: ImportSummary): void {
+  const incoming = incomingMcpServers(raw);
+  if (!incoming) {
     summary.skipped.push("mcpServers (unparseable)");
     return;
   }
-  if (!incoming.mcpServers) return;
-
-  const target = path.join(os.homedir(), ".claude.json");
-  let live: Record<string, unknown> = {};
-  try {
-    const liveRaw = fs.readFileSync(target, "utf-8");
-    if (liveRaw.trim()) live = JSON.parse(liveRaw) as Record<string, unknown>;
-  } catch {
-    // empty/corrupt — start from empty object
-  }
-
-  const existingServers = (live.mcpServers as Record<string, unknown>) ?? {};
-  const merged: Record<string, unknown> = { ...existingServers };
-  for (const [name, cfg] of Object.entries(incoming.mcpServers)) {
-    merged[name] = cfg;
-    summary.mergedMcpServers.push(name);
-  }
-  live.mcpServers = merged;
-  fs.writeFileSync(target, JSON.stringify(live, null, 2));
+  if (Object.keys(incoming).length === 0) return;
+  const result = withLocks([CONFIG_LOCK], () => {
+    const target = resolveUnlinkedPath(os.homedir(), ".claude.json");
+    if (!target) throw new Error("Claude config has a linked or invalid path and was left untouched.");
+    const live = readLiveConfig(target);
+    live.mcpServers = { ...(live.mcpServers as Record<string, unknown> | undefined), ...incoming };
+    writeFileAtomic(target, JSON.stringify(live, null, 2));
+    summary.mergedMcpServers.push(...Object.keys(incoming));
+  });
+  if (!result.ok) throw new Error(describeLockFailure(result.failure));
 }
 
 export function importBrain(
@@ -156,7 +163,7 @@ export function importBrain(
         mergeMcpServers(entry.data.toString("utf-8"), summary);
         continue;
       }
-      const abs = safeJoin(CLAUDE_DIR, relative);
+      const abs = resolveBrainPath("global", CLAUDE_DIR, relative);
       if (!abs) {
         summary.skipped.push(entry.path);
         continue;
@@ -176,7 +183,7 @@ export function importBrain(
         summary.skipped.push(entry.path);
         continue;
       }
-      const abs = safeJoin(workspacePath, relative);
+      const abs = resolveBrainPath("project", workspacePath, relative);
       if (!abs) {
         summary.skipped.push(entry.path);
         continue;
@@ -270,32 +277,21 @@ export function previewConflicts(
     if (!pickSections.includes(section)) continue;
 
     if (section === "global" && relative === "mcpServers.json") {
-      try {
-        const incoming = JSON.parse(entry.data.toString("utf-8")) as {
-          mcpServers?: Record<string, unknown>;
-        };
-        if (!incoming.mcpServers) continue;
-        const target = path.join(os.homedir(), ".claude.json");
-        let live: Record<string, unknown> = {};
-        try {
-          const raw = fs.readFileSync(target, "utf-8");
-          if (raw.trim()) live = JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          // no live file — nothing to replace
-        }
-        const existing = (live.mcpServers as Record<string, unknown>) ?? {};
-        for (const name of Object.keys(incoming.mcpServers)) {
-          if (name in existing) mcpReplacements.push(name);
-        }
-      } catch {
-        // unparseable — importer will surface as skipped
+      const incoming = incomingMcpServers(entry.data.toString("utf-8"));
+      if (!incoming || Object.keys(incoming).length === 0) continue;
+      const target = resolveUnlinkedPath(os.homedir(), ".claude.json");
+      if (!target) throw new Error("Claude config has a linked or invalid path and was left untouched.");
+      const live = readLiveConfig(target);
+      const existing = (live.mcpServers as Record<string, unknown> | undefined) ?? {};
+      for (const name of Object.keys(incoming)) {
+        if (Object.hasOwn(existing, name)) mcpReplacements.push(name);
       }
       continue;
     }
 
     const root = section === "global" ? CLAUDE_DIR : workspacePath;
     if (!root) continue;
-    const abs = safeJoin(root, relative);
+    const abs = resolveBrainPath(section, root, relative);
     if (!abs) continue;
     if (!fs.existsSync(abs)) continue;
     try {

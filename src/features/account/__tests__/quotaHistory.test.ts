@@ -7,19 +7,42 @@ import type { QuotaResult } from "../quota";
  * newer-capture guard and eviction can be asserted without disk, and a
  * settable identity so "the account changed between reads" is reachable.
  */
-const vfs = vi.hoisted(() => ({ files: {} as Record<string, string>, writes: 0 }));
+const vfs = vi.hoisted(() => ({
+  files: {} as Record<string, string>,
+  writes: 0,
+  descriptors: new Map<number, string>(),
+  nextFd: 100,
+}));
 const identity = vi.hoisted(() => ({ uuid: "acct-a" }));
 
 vi.mock("fs", () => {
-  const enoent = (): never => {
-    const e = new Error("ENOENT") as NodeJS.ErrnoException;
-    e.code = "ENOENT";
+  const fail = (code: string): never => {
+    const e = new Error(code) as NodeJS.ErrnoException;
+    e.code = code;
     throw e;
   };
+  const enoent = (): never => fail("ENOENT");
   return {
     readFileSync: (p: string): string => vfs.files[p] ?? enoent(),
-    writeFileSync: (p: string, data: string): void => {
-      vfs.files[p] = data;
+    lstatSync: (p: string): { isFile: () => boolean; mode: number } => {
+      if (!Object.hasOwn(vfs.files, p)) enoent();
+      return { isFile: () => true, mode: 0o600 };
+    },
+    openSync: (p: string, flags: string): number => {
+      if (flags !== "wx") throw new Error(`Unsupported flags: ${flags}`);
+      if (Object.hasOwn(vfs.files, p)) fail("EEXIST");
+      const fd = vfs.nextFd++;
+      vfs.files[p] = "";
+      vfs.descriptors.set(fd, p);
+      return fd;
+    },
+    writeFileSync: (p: string | number, data: string | Uint8Array): void => {
+      const target = typeof p === "number" ? vfs.descriptors.get(p) : p;
+      if (target === undefined) fail("EBADF");
+      vfs.files[target!] = typeof data === "string" ? data : Buffer.from(data).toString("utf8");
+    },
+    closeSync: (fd: number): void => {
+      if (!vfs.descriptors.delete(fd)) fail("EBADF");
     },
     renameSync: (from: string, to: string): void => {
       const data = vfs.files[from];
@@ -79,6 +102,8 @@ function reading(capturedAt: string, sevenDay = 62, fiveHour = 15): QuotaResult 
 beforeEach(() => {
   vfs.files = {};
   vfs.writes = 0;
+  vfs.descriptors.clear();
+  vfs.nextFd = 100;
   identity.uuid = "acct-a";
 });
 

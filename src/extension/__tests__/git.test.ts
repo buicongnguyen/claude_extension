@@ -209,3 +209,36 @@ describe("onBranchChange", () => {
     }).not.toThrow();
   });
 });
+
+describe("getCurrentBranch — selected repository", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    Object.assign(vscode.workspace, { workspaceFolders: [] });
+    Object.assign(vscode.window, { activeTextEditor: undefined });
+  });
+  function installRepos() {
+    vi.spyOn(vscode.extensions, "getExtension").mockReturnValue({
+      isActive: true, exports: { getAPI: () => ({ repositories: [
+        { rootUri: { fsPath: "C:/repo-a" }, state: { HEAD: { name: "main" } } },
+        { rootUri: { fsPath: "C:/repo-b" }, state: { HEAD: { name: "feature" } } },
+        { rootUri: { fsPath: "C:/repo-b/nested" }, state: { HEAD: { name: "nested" } } },
+      ] }) },
+    } as never);
+  }
+  it("uses the actual session cwd rather than the first Git repository", () => {
+    installRepos();
+    expect(getCurrentBranch("c:\\REPO-B\\src")).toBe("feature");
+    expect(getCurrentBranch("C:/repo-b/nested/src")).toBe("nested");
+    expect(getCurrentBranch("C:/repo-b-other")).toBe("");
+  });
+  it("uses the active editor's workspace for branch indicators", () => {
+    installRepos();
+    const folder = { uri: { fsPath: "C:/repo-b" }, name: "b", index: 1 };
+    Object.assign(vscode.workspace, { workspaceFolders: [
+      { uri: { fsPath: "C:/repo-a" }, name: "a", index: 0 }, folder,
+    ] });
+    Object.assign(vscode.window, { activeTextEditor: { document: { uri: { fsPath: "C:/repo-b/file.ts" } } } });
+    vi.spyOn(vscode.workspace, "getWorkspaceFolder").mockReturnValue(folder as never);
+    expect(getCurrentBranch()).toBe("feature");
+  });
+});

@@ -46,7 +46,9 @@ import { readClaudeJsonRaw } from "./claudeJsonCache";
 import { withLocks, CREDENTIAL_LOCKS, CONFIG_LOCK, describeLockFailure } from "./claudeLocks";
 import {
   readCredentials,
+  readCredentialsStatus,
   hashCredentials,
+  type LiveCredentials,
   type CredentialsSource,
 } from "./credentials";
 
@@ -148,17 +150,29 @@ function hashFile(filePath: string): string {
  * token generation and credentials with another, producing a
  * snapshot that never matches either identity cleanly.
  */
+class UnreadableCredentialsError extends Error {
+  constructor() {
+    super("Claude's current credentials could not be read. Unlock its credential store or retry after login finishes. The current login was not replaced.");
+  }
+}
+/** Called only while the profile operation owns Claude's credential locks. */
+function readFreshCredentials(): LiveCredentials | null {
+  const status = readCredentialsStatus({ fresh: true });
+  if (status.state === "transient") throw new UnreadableCredentialsError();
+  return status.state === "ok" ? status.live : null;
+}
+
 function readLivePairRaceSafe(): {
   claudeJsonRaw: string;
   credsRaw: string;
   source: CredentialsSource;
 } | null {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const pre = readCredentials();
+    const pre = readFreshCredentials();
     if (!pre) return null;
     const claudeJsonRaw = readClaudeJsonRaw();
     if (claudeJsonRaw === null || !claudeJsonRaw.trim()) return null;
-    const post = readCredentials();
+    const post = readFreshCredentials();
     if (!post) return null;
     if (post.hash === pre.hash && readClaudeJsonRaw() === claudeJsonRaw) {
       return { claudeJsonRaw, credsRaw: post.raw, source: post.source };
@@ -306,8 +320,7 @@ export function listProfiles(): SavedProfile[] {
  * macOS Keychain users get the same identity-resolution behaviour as
  * file users.
  */
-function readLiveIdentity(): LiveIdentity | null {
-  const live = readCredentials();
+function readLiveIdentity(live = readCredentials()): LiveIdentity | null {
   if (!live) return null;
   const tokenIdentity = extractIdentityFromToken(live.raw);
   if (tokenIdentity) return tokenIdentity;
@@ -349,7 +362,10 @@ export function getActiveProfileSlug(
   knownProfiles?: SavedProfile[],
 ): string | null {
   const live = readCredentials();
-  if (!live) return null;
+  return live ? activeProfileForCredentials(live, knownProfiles) : null;
+}
+
+function activeProfileForCredentials(live: LiveCredentials, knownProfiles?: SavedProfile[]): string | null {
   const liveHash = live.hash;
 
   // Callers that already hold the profile list (parseAccountData lists
@@ -362,7 +378,7 @@ export function getActiveProfileSlug(
     if (p.credentialsHash === liveHash) return p.slug;
   }
 
-  const liveIdentity = readLiveIdentity();
+  const liveIdentity = readLiveIdentity(live);
   if (!liveIdentity) return null;
 
   // Tie-break by freshest savedAt when more than one profile matches
@@ -569,6 +585,9 @@ function sameApproval(a: ProfileUpdateApproval, b: ProfileUpdateApproval): boole
   return a.slug === b.slug && a.liveHash === b.liveHash && a.configHash === b.configHash && a.savedHash === b.savedHash;
 }
 export function captureProfileUpdate(slug: string): ProfileResult<ProfileUpdateApproval> {
+  return withProfileLocks(() => captureProfileUpdateUnlocked(slug));
+}
+function captureProfileUpdateUnlocked(slug: string): ProfileResult<ProfileUpdateApproval> {
   if (hasPendingSwitch()) return pendingRecovery();
   const pair = readLivePairRaceSafe();
   if (!pair) return { ok: false, error: "no-active-account" };
@@ -652,7 +671,15 @@ export function switchProfile(slug: string, approval?: ProfileUpdateApproval): P
   return withProfileLocks(() => switchProfileUnlocked(slug, approval));
 }
 function withProfileLocks<T>(work: () => ProfileResult<T>): ProfileResult<T> {
-  const result = withLocks([...CREDENTIAL_LOCKS, CONFIG_LOCK], work);
+  const result = withLocks([...CREDENTIAL_LOCKS, CONFIG_LOCK], () => {
+    try { return work(); }
+    catch (error) {
+      if (error instanceof UnreadableCredentialsError) {
+        return { ok: false, error: "unreadable-source", detail: error.message } as ProfileResult<T>;
+      }
+      throw error;
+    }
+  });
   return result.ok ? result.value : { ok: false, error: "copy-failed", detail: describeLockFailure(result.failure) };
 }
 
@@ -660,7 +687,7 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
   const recovery = recoverPendingSwitchUnlocked();
   if (!recovery.ok) return recovery;
   if (approval) {
-    const current = captureProfileUpdate(approval.slug);
+    const current = captureProfileUpdateUnlocked(approval.slug);
     if (!current.ok || !sameApproval(approval, current.data)) return { ok: false, error: "stale-confirmation", detail: "The account changed while confirmation was open. Reopen the account picker." };
   }
   const slotDir = slotDirectory(slug);
@@ -677,8 +704,9 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
   // in the live credentials — the slot keeps the original (now
   // server-revoked) refresh token, and switching back to it later
   // produces a 401. Abort the switch if the outgoing snapshot cannot be saved.
+  const liveCredentials = readFreshCredentials();
   try {
-    const activeSlug = getActiveProfileSlug();
+    const activeSlug = liveCredentials ? activeProfileForCredentials(liveCredentials) : null;
     if (activeSlug === slug) return updateProfileUnlocked(slug, approval);
     if (activeSlug) {
       const saved = updateProfileUnlocked(activeSlug, approval);
@@ -751,7 +779,6 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
   if (!written.ok) return written;
 
   const meta = readSnapshotMeta(slotDir);
-  const liveAfter = readCredentials();
   return {
     ok: true,
     data: {
@@ -762,9 +789,8 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
       subscriptionType: meta.subscriptionType ?? "",
       savedAt: meta.savedAt ?? "",
       tokenExpiresAt: meta.tokenExpiresAt ?? 0,
-      credentialsHash: liveAfter
-        ? liveAfter.hash
-        : hashCredentials(credsRaw),
+      // The transaction already verified these exact bytes in the live store.
+      credentialsHash: hashCredentials(credsRaw),
       userID: meta.userID ?? "",
       accountUuid: meta.accountUuid ?? "",
     },

@@ -272,13 +272,13 @@ describe("custom actions (terminal launches)", () => {
   it("authenticate runs `claude mcp login <name>`", async () => {
     const { ctx, shell } = harness();
     await handleMcpMessage({ type: "authenticateMcp", name: "api" }, ctx);
-    expect(shell[0].command).toBe("claude mcp login 'api'");
+    expect(shell[0].command).toBe("claude mcp login api");
   });
 
   it("logout runs `claude mcp logout <name>`", async () => {
     const { ctx, shell } = harness();
     await handleMcpMessage({ type: "logoutMcp", name: "api" }, ctx);
-    expect(shell[0].command).toBe("claude mcp logout 'api'");
+    expect(shell[0].command).toBe("claude mcp logout api");
   });
 
   it("reconnect opens the /mcp slash panel", async () => {
@@ -293,11 +293,20 @@ describe("custom actions (terminal launches)", () => {
     expect(shell[0].command).toBe("claude mcp list");
   });
 
-  it("shell-escapes a server name with a single quote", async () => {
+  it.each(["a'b", "demo'; Write-Output REVIEW_INJECTION; #", "name&echo bad", "x\ny", "x\n", "x\r\n", "$(whoami)", "-help"])(
+    "rejects unsafe shell/option names without launching: %s", async (name) => {
+      const { ctx, shell } = harness();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await handleMcpMessage({ type: "authenticateMcp", name }, ctx);
+      await handleMcpMessage({ type: "logoutMcp", name }, ctx);
+      expect(shell).toHaveLength(0);
+      expect(err).toHaveBeenCalled();
+    },
+  );
+
+  it("keeps safe native server names usable across terminal shells", async () => {
     const { ctx, shell } = harness();
-    await handleMcpMessage({ type: "authenticateMcp", name: "a'b" }, ctx);
-    // POSIX close-quote, escaped literal quote, reopen: a'b -> 'a'\''b'
-    const escaped = ["'a'", "\\'", "'b'"].join("");
-    expect(shell[0].command).toBe(`claude mcp login ${escaped}`);
+    await handleMcpMessage({ type: "authenticateMcp", name: "API-server_2" }, ctx);
+    expect(shell[0].command).toBe("claude mcp login API-server_2");
   });
 });
