@@ -1,0 +1,430 @@
+/* Reset (additive, beyond the existing box-sizing rule) */
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  background: var(--bg);
+  color: var(--fg);
+  height: 100vh;
+  overflow: hidden;
+}
+/* Both axes. `width` sizes a vertical bar and `height` a horizontal one — with
+   only the first set, every sideways scroller (the tab strip, the bulk-select
+   toolbar, wide code blocks) drew the browser's default ~15px bar under it. */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 3px;
+}
+#root { height: 100vh; display: flex; flex-direction: column; }
+
+/* App root wrapper. Carries `data-density` for the whole panel (see
+   density.css). `display: contents` keeps it out of layout entirely, so the
+   tab bar, content area and footer remain direct flex children of #root —
+   the same mechanism .tab-keepalive uses for inactive tabs. */
+.app-shell { display: contents; }
+
+
+/* ============================================================================
+   Claude Session Manager — Base Styles
+   ============================================================================
+
+   CSS Variables Reference (defined by VS Code theme via inline <style>):
+   --fs-xs, --fs-sm, --fs-base, --fs-md, --fs-lg, --fs-xl   Font sizes
+   --mono                                                     Monospace font
+   --fg, --fg-dim, --fg-dim                                Text colors
+   --bg-hover, --bg-active, --bg-active-fg                   Backgrounds
+   --border, --shadow                                        Borders/shadows
+   --input-bg, --input-fg, --input-border                    Form inputs
+   --accent, --link                                          Accent colors
+   --btn-bg, --btn-fg, --btn-hover                           Button colors
+   --badge-bg, --badge-fg                                    Native count/avatar
+   --badge-neutral-bg, --badge-neutral-fg                    Neutral scope/tag chips
+   --dropdown-bg, --dropdown-border                          Dropdown colors
+   --menu-bg, --menu-fg, --menu-border                       Context menu
+   --green, --green-bg                                       Success/resume
+   --red, --red-bg                                           Danger/delete
+   --radius, --radius-sm, --radius-md, --radius-lg           Border radii
+   --space-xs, --space-md, --space-lg, --space-2xl           Spacing
+   ============================================================================ */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Control-size tokens — ONE source of truth for heights and padding on
+   buttons, inputs, dropdowns, and segmented controls. Keeping these as
+   CSS variables means every form control stays pixel-aligned, and a
+   future tweak to density propagates everywhere in one change.
+   ────────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /** Default height for interactive form controls (buttons, inputs, dropdowns).
+      32px gives comfortable click targets and enough breathing room for
+      icon + label content without feeling cramped. */
+  --h-control: 32px;
+  /** Compact variant (message toggle, inline pills). */
+  --h-control-sm: 26px;
+  /** Prominent variant (toolbar primary buttons). */
+  --h-control-lg: 36px;
+
+  /** Standard horizontal padding inside controls. */
+  --pad-control-x: 12px;
+
+  /** Unified transition for hover/focus/state changes on controls. */
+  --transition-control: 150ms ease;
+
+  /** Unified focus ring. Used by everything interactive so keyboard
+      navigation is visually consistent across the extension. */
+  --focus-ring: 1px solid var(--accent);
+}
+
+/* Global box-sizing reset so `height` on controls includes the border,
+   meaning bordered inputs and border-less buttons land on the same
+   pixel row without manually subtracting 2px. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Button normalize. Every button in the webview is themed by a class
+   (.btn, .back-btn, or a feature class); a bare <button> must NOT fall back
+   to the platform's raised ButtonFace chrome — that light box is unreadable on
+   a dark theme (it was showing behind the commands "Documentation" link). Strip
+   the UA appearance and inherit type context; class rules layer their own
+   fill/border/height on top. */
+button {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Reusable Utility Classes
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.text-sm   { font-size: var(--fs-sm); }
+.text-muted { color: var(--fg-dim); }
+.mono      { font-family: var(--mono); font-size: var(--fs-sm); }
+.label     { font-size: var(--fs-sm); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--fg-dim); }
+.icon      { display: inline-block; vertical-align: middle; flex-shrink: 0; }
+.hidden    { display: none !important; }
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Layout (Panel)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Misc (Loading, Empty)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Subtle text loader — VS Code shows a quiet, gently-pulsing label rather
+   than a heavyweight spinner for view content. The pulse uses opacity only
+   (no colour shift) so it stays calm; reduced-motion users get a static
+   label. */
+.loading {
+  text-align: center;
+  /* Shared centered-state vertical inset (28px = 2×--space-2xl), matching
+     .empty / .empty-state / .state-empty so every "no content" / "loading"
+     surface sits at one rhythm. */
+  padding: calc(var(--space-2xl) * 2) var(--space-2xl);
+  font-size: var(--fs-base);
+  color: var(--fg-dim);
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+@keyframes loading-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading { animation: none; }
+}
+
+/* Initial-paint loader for tab containers — shows immediately while
+   the host parses data so users see activity instead of an empty
+   panel. Replaced the moment the tab's first data message arrives
+   and the feature mounts its real shell. */
+.panel-loader {
+  padding: var(--space-md);
+  width: 100%;
+}
+.skeleton-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+/* Skeleton atoms (<SkeletonLine /> / <SkeletonBlock /> / <SkeletonCircle />).
+   `.skeleton-el` is the shared recessed-bar base + shimmer host; the variant
+   classes only differ in default shape. Width / height / size / radius come
+   from the component's inline style (data-driven, no static class equivalent),
+   matching QuotaBar's width-from-utilization pattern. */
+.skeleton-el {
+  background: var(--bg-hover);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.skeleton-line {
+  height: 10px;
+  border-radius: var(--radius-sm);
+}
+.skeleton-block {
+  border-radius: var(--radius);
+}
+.skeleton-circle {
+  border-radius: 50%;
+}
+
+/* Shimmer overlay: a low-alpha gradient slides left→right across each
+   element.
+   
+   The sweep colour is mixed from the THEME FOREGROUND, not a fixed white.
+   Pure white at 8% was invisible on light themes — the bar beneath it is
+   --bg-hover, a pale grey there, so white-on-near-white left half the users
+   staring at a static block while the other half saw motion. Mixing from
+   --fg inverts with the theme automatically: a light wash on dark grounds,
+   a dark wash on light ones, with no theme branching and no second rule. */
+.skeleton-el::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--fg) 12%, transparent) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+/* Stagger so the sweep cascades down a column of placeholders instead of
+   pulsing in lockstep. Applies to the generic <SkeletonList /> rows. */
+.skeleton-row:nth-child(2) .skeleton-el::after { animation-delay: 0.08s; }
+.skeleton-row:nth-child(3) .skeleton-el::after { animation-delay: 0.16s; }
+.skeleton-row:nth-child(4) .skeleton-el::after { animation-delay: 0.24s; }
+.skeleton-row:nth-child(5) .skeleton-el::after { animation-delay: 0.32s; }
+.skeleton-row:nth-child(6) .skeleton-el::after { animation-delay: 0.40s; }
+
+@keyframes skeleton-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Reduced-motion: drop the sweep, keep static placeholder so users
+   still see structure. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-el::after { animation: none; display: none; }
+}
+
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Focus & Accessibility
+   ────────────────────────────────────────────────────────────────────────────── */
+
+*:focus-visible { outline: var(--focus-ring); outline-offset: -1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/*
+ * Make every interactive surface non-selectable so a stray double or
+ * triple click on a button / row / header doesn't highlight the label
+ * and hijack the click handler. Keep things users actually want to
+ * copy (input values, code blocks, message content, key/value rows,
+ * permission tool names, stat numerals) selectable by keeping them
+ * out of this list.
+ */
+button,
+[role="button"],
+.tab-btn, .tab-btn *,
+.vsc-segmented-seg,
+.section-header, .section-header *,
+.actions-row .btn, .actions-row .btn *,
+.cfg-perm-remove,
+.acct-quota-row-head, .acct-quota-row-head *,
+.empty-state-title,
+.empty-state-desc,
+.footer-link,
+.footer-name,
+.app-footer,
+.vsc-segmented, .vsc-segmented * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Host busy bar ─────────────────────────────────────────────────
+ * Thin indeterminate progress strip pinned to the top of the panel,
+ * shown while a webview→host request has been outstanding for >300ms
+ * (see webview/shared/model/hostBusy.ts). Gives every slow action
+ * visible progress instead of a seemingly dead panel. */
+.host-busy-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 1000;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-progressBar-background) 25%, transparent);
+}
+
+.host-busy-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: var(--vscode-progressBar-background);
+  animation: host-busy-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes host-busy-slide {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host-busy-bar::after {
+    animation: none;
+    width: 100%;
+    left: 0;
+    opacity: 0.6;
+  }
+}
+
+/* ── App footer ────────────────────────────────────────────────────
+ * Shell chrome: rendered once by App.tsx below the tab content, so it
+ * stays visible across every tab. flex-shrink:0 keeps it from being
+ * squeezed by the sibling .tab-content-area (flex:1) that fills the
+ * rest of the #root column above it. */
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  /* Tight vertical padding: this is persistent chrome on every tab, and at
+     --space-lg top and bottom it stood taller than a session row while
+     carrying a wordmark and two links. Horizontal inset still matches the
+     rows above it. */
+  padding: 0 var(--space-2xl);
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  border-top: 1px solid var(--vscode-panel-border, var(--border, rgba(127,127,127,0.18)));
+}
+.footer-name { color: var(--fg-dim); font-weight: 600; font-size: var(--fs-sm); }
+
+.footer-links {
+  display: flex;
+  gap: var(--space-xs);
+}
+.footer-link {
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  /* The links set the bar's height, so their own padding is what made it
+     stand taller than a list row — the footer itself now adds none. */
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius);
+  transition: color var(--transition-control);
+  font-family: inherit;
+}
+.footer-link .icon { width: 13px; height: 13px; }
+.footer-link:hover { color: var(--fg); background: var(--bg-hover); }
+
+/* ── Load-deadline notice ──────────────────────────────────────────
+ * Replaces a tab skeleton once its first load overruns the deadline
+ * (see webview/shared/ui/LoadDeadline). */
+.load-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.load-notice-title {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.load-notice-hint {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  max-width: 320px;
+}
+
+.load-notice-retry {
+  margin-top: 8px;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Crash surface — the banner crashSurface.ts paints for an exception that
+   escaped the Preact error boundary (a host-message handler, an async
+   callback, module top-level). Fixed rather than in flow: the tree it would
+   sit inside is exactly what may have failed.
+   ────────────────────────────────────────────────────────────────────────── */
+.crash-surface {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: auto;
+  padding: var(--space-lg);
+  background: var(--bg);
+  color: var(--fg);
+}
+.crash-surface-title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  color: var(--vscode-errorForeground, var(--fg));
+}
+.crash-surface-actions {
+  display: flex;
+  gap: var(--space-sm);
+  /* Sits under the detail: the message is what the user reads first, the
+     actions are what they do about it. */
+  margin-top: var(--space-md);
+}
+.crash-surface-detail {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-dim);
+  /* A stack is long lines: wrap them rather than adding a horizontal
+     scrollbar to a message the user is meant to read and paste. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}

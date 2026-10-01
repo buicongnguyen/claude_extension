@@ -1,0 +1,238 @@
+/**
+ * One row in the session list. Shows the live-status dot, name, relative
+ * time, optional prompt subtitle, branch tag, project, and pin marker, plus
+ * a hover-revealed task continuation button.
+ *
+ * Pure presentational component: all interaction is delegated to callbacks so
+ * the list view owns selection / navigation logic and this stays testable in
+ * isolation.
+ */
+import { Button, Icon, Tag } from "../../../../../webview/shared/ui";
+import { fmtRelativeTime } from "../../../../../webview/utils";
+import { cx } from "../../../../../webview/shared/lib";
+import { now } from "../../../../../webview/shared/model";
+import { pathTail } from "../../lib";
+import type { Session, WorktreeRef } from "../../../types";
+
+/**
+ * Map a CLI-reported lifecycle status to a tooltip. Known values get a
+ * friendly label; unknown strings fall through to the raw status so new CLI
+ * states surface without an extension update.
+ */
+export function liveTitleForStatus(status: string | undefined): string {
+  switch (status) {
+    case "busy":
+      return "Session is busy";
+    case "idle":
+      return "Session is idle";
+    case "awaiting_permission":
+    case "waiting_permission":
+    case "permission_prompt":
+      return "Awaiting permission";
+    case "awaiting_question":
+      return "Awaiting your answer";
+    case undefined:
+    case "":
+      return "Session is live";
+    default:
+      return `Session: ${status}`;
+  }
+}
+
+export interface SessionItemProps {
+  session: Session;
+  isActive: boolean;
+  isPinned: boolean;
+  isSelected: boolean;
+  bulkMode: boolean;
+  hasOpenTerminal: boolean;
+  /** True when this row is backed by a temp (ephemeral) run — its transcript
+   * is deleted when the terminal closes unless promoted to permanent. */
+  isTemp: boolean;
+  /**
+   * True when this session belongs to a different project than the current
+   * workspace. Resuming isn't possible from the row in that case — the detail
+   * view offers "Open {project}" instead — so the row hides the Resume
+   * affordance rather than offering an action that can't do what it says.
+   */
+  isDiffProject: boolean;
+  /**
+   * Resolved git worktree for this session, when it ran inside one. Drives the
+   * worktree badge (Claude- vs user-created) — undefined for sessions not in a
+   * worktree, and "main"-kind refs render no badge (the primary checkout is the
+   * unremarkable default).
+   */
+  worktree?: WorktreeRef;
+  onSelect: (id: string) => void;
+  /** Submit a continuation request for this inactive session in a terminal. */
+  onResume: (id: string) => void;
+  onView: (id: string) => void;
+  onToggleSelect: (id: string, range: boolean) => void;
+  /** Open the row's action menu at the given viewport point (right-click). */
+  onContextMenu: (id: string, x: number, y: number) => void;
+}
+
+export function SessionItem({
+  session,
+  isActive,
+  isPinned,
+  isSelected,
+  bulkMode,
+  hasOpenTerminal,
+  isTemp,
+  isDiffProject,
+  worktree,
+  onSelect,
+  onResume,
+  onView,
+  onToggleSelect,
+  onContextMenu,
+}: SessionItemProps) {
+  const displayName = session.name || session.prompts[0] || "Untitled session";
+  const branch = session.branch && session.branch !== "HEAD" ? session.branch : "";
+  // Badge only for Claude/user worktrees — the main checkout is the default and
+  // gets no badge. The badge carries the branch, so the plain branch tag below
+  // is suppressed when a badge shows to avoid printing the branch twice.
+  const wt = worktree && (worktree.kind === "claude" || worktree.kind === "user") ? worktree : null;
+  const wtName = wt ? pathTail(wt.path) : "";
+  const wtBranch = wt && wt.branch && wt.branch !== "HEAD" ? wt.branch : "";
+  const wtKindLabel = wt?.kind === "claude" ? "Claude-created" : "User-created";
+  const wtTitle = wt
+    ? `${wtKindLabel} worktree · ${wtName}${wtBranch ? ` · ${wtBranch}` : ""}` +
+      (!wt.exists ? " · removed from disk" : wt.locked ? " · in active use" : "")
+    : "";
+  // Read the shared clock so "5m" → "6m" ticks live without a data change.
+  const relTime = fmtRelativeTime(session.endTime, now.value);
+  const absDate = new Date(session.endTime).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const firstPrompt = session.prompts[0] ?? "";
+  // The prompt is a SECOND line, so it only earns its place when it says
+  // something the title does not. `displayName` already falls back to the first
+  // prompt when a session has no name, and a session named after its opening
+  // prompt (`claude -n` with the same text, or a rename to match) otherwise
+  // printed the identical string twice — one row, one sentence, said twice.
+  const showSubPrompt = Boolean(session.name && firstPrompt && firstPrompt !== displayName);
+  const liveStatus = session.isLive ? session.status ?? "" : "";
+  const onClick = (e: MouseEvent): void => {
+    if (bulkMode) {
+      onToggleSelect(session.id, e.shiftKey === true);
+      return;
+    }
+    onSelect(session.id);
+  };
+
+  // Right-click opens the row's action menu at the cursor. Suppressed in bulk
+  // mode (clicks toggle selection there) to match v1.
+  const onRowContextMenu = (e: MouseEvent): void => {
+    if (bulkMode) return;
+    e.preventDefault();
+    onContextMenu(session.id, e.clientX, e.clientY);
+  };
+
+  return (
+    <div
+      class={cx("item session-item", { active: isActive, "is-selected": isSelected })}
+      data-id={session.id}
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e: KeyboardEvent) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        // A row hosts an inline action <Button> (resume/view); its own Enter/
+        // Space activation is native — don't also trigger row selection.
+        if ((e.target as HTMLElement).tagName === "BUTTON") return;
+        e.preventDefault();
+        onClick(e as unknown as MouseEvent);
+      }}
+      onContextMenu={onRowContextMenu}
+    >
+      <div class="item-row1">
+        {session.isLive ? (
+          <span
+            class="live-dot"
+            data-status={liveStatus || undefined}
+            title={liveTitleForStatus(session.status)}
+            role="img"
+            aria-label={liveTitleForStatus(session.status)}
+          />
+        ) : null}
+        <span class="item-name" title={displayName}>
+          {displayName}
+        </span>
+        <span class="item-time" title={absDate}>
+          {relTime}
+        </span>
+      </div>
+
+      {bulkMode ? null : (
+        <div class="item-actions">
+          {/* View reveals the running chat or tracked terminal. Fresh account
+              recovery is an explicit action in the detail view. */}
+          {hasOpenTerminal || session.isLive ? (
+            <Button
+              variant="icon"
+              class="item-resume"
+              iconName="terminal"
+              title={hasOpenTerminal ? "View open terminal" : "Show the running Claude chat or terminal"}
+              onClick={(e) => {
+                e.stopPropagation();
+                onView(session.id);
+              }}
+            />
+          ) : isDiffProject ? null : (
+            <Button
+              variant="icon"
+              class="item-resume"
+              iconName="play"
+              title="Continue task in terminal"
+              onClick={(e) => {
+                e.stopPropagation();
+                onResume(session.id);
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {showSubPrompt ? (
+        <div class="item-prompt" title={firstPrompt}>
+          {firstPrompt}
+        </div>
+      ) : null}
+
+      <div class="item-row2">
+        {isTemp ? (
+          <Tag
+            variant="temp"
+            text="Temp"
+            title="Temp session — its transcript is deleted when the terminal closes. Right-click → Make permanent to keep it."
+          />
+        ) : null}
+        {wt ? (
+          <Tag
+            variant="worktree"
+            tone={wt.kind === "claude" ? "claude" : "user"}
+            icon={wt.kind === "claude" ? "bot" : "git-branch"}
+            text={wtName}
+            detail={wtBranch || undefined}
+            missing={!wt.exists}
+            locked={wt.locked}
+            title={wtTitle}
+          />
+        ) : branch ? (
+          <Tag icon="git-branch" text={branch} title={branch} />
+        ) : null}
+        <Tag variant="folder" icon="folder" text={session.project} title={session.project} />
+        {isPinned ? (
+          <span class="pin-icon" title="Pinned">
+            <Icon name="pin" size={11} />
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}

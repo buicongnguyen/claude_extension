@@ -1,0 +1,230 @@
+/* ============================================================================
+   Claude Manager — Commands & Hooks Feature Styles
+   ============================================================================ */
+
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Commands — List
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Result count captions use the shared `.list-count` (components.css). */
+
+.cmd-item {
+  padding: var(--space-lg) var(--space-2xl);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  transition: background var(--transition-control);
+}
+.cmd-item:last-child         { border-bottom: none; }
+.cmd-item:hover              { background: var(--bg-hover); }
+.cmd-item.active             { background: var(--bg-active); color: var(--bg-active-fg); }
+.cmd-item:focus-visible      { outline: 1px solid var(--list-focus); outline-offset: -1px; }
+
+.cmd-item-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.cmd-item-name {
+  font-size: var(--fs-md);
+  font-family: var(--mono);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.cmd-item.active .cmd-item-name { color: var(--bg-active-fg); }
+
+.cmd-item-preview {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: var(--space-xs);
+}
+.cmd-item.active .cmd-item-preview { color: var(--bg-active-fg); opacity: 0.65; }
+
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Commands — Detail View
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Detail head/title now use the shared `.d-head.d-head--row` + `.d-title mono`
+   (the command name stays monospace via the shared `.mono` utility). */
+
+.cmd-detail-actions {
+  /* Flex-wrap content-width so labels are never cropped (was an auto-fit grid
+     with minmax(110px, 1fr); the "Copy /<long-name>" label could exceed a
+     narrow column and clip under `.btn`'s ellipsis chrome). */
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding: 0 var(--space-2xl) var(--space-lg);
+}
+.cmd-detail-actions > .btn {
+  /* Shared `… > .btn` override (components.css) resets the ellipsis clip and
+     sizes to content; only the centring stays local. */
+  justify-content: center;
+}
+
+.cmd-detail-path {
+  padding: 0 var(--space-2xl) var(--space-lg);
+  word-break: break-all;
+}
+
+/* Section/label/code-block chrome uses the shared `.d-section` / `.d-label` /
+   `.d-pre` (components.css) — was a byte-identical private copy. */
+
+.cmd-detail-desc {
+  font-size: var(--fs-md);
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+.cmd-detail-link {
+  display: inline-block;
+  padding: 0;
+  text-align: left;
+  font-size: var(--fs-md);
+  color: var(--link);
+  text-decoration: none;
+  word-break: break-all;
+  cursor: pointer;
+}
+.cmd-detail-link:hover { text-decoration: underline; }
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Hooks — List Items
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.hook-item {
+  padding: var(--space-lg) var(--space-2xl);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition-control);
+}
+.hook-item:last-child        { border-bottom: none; }
+.hook-item:hover             { background: var(--bg-hover); }
+.hook-item:focus-visible     { outline: 1px solid var(--list-focus); outline-offset: -1px; }
+
+.hook-command-block {
+  background: var(--bg-hover);
+  color: var(--fg);
+  padding: var(--space-md);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.55;
+  margin: 0;
+}
+.hook-command-block code {
+  background: none;
+  padding: 0;
+}
+
+/* The row's name. Takes the slack so the chips and hover actions keep their
+   size, and ellipsizes rather than wrapping — a hook row is one line. */
+.hook-item-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hook-item.is-disabled .hook-item-name {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.hook-item-row1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xs);
+}
+
+.hook-item.is-disabled .hook-matcher,
+.hook-item.is-disabled .hook-item-command code {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.hook-item-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: var(--space-xs);
+  opacity: 0;
+  transition: opacity var(--transition-control);
+}
+.hook-item:hover .hook-item-actions,
+.hook-item:focus-within .hook-item-actions {
+  opacity: 1;
+}
+
+.hook-matcher {
+  font-family: var(--mono);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  /* A long matcher (e.g. Bash|Write|Edit|Read) must not push the badges +
+     hover actions out of the row — clip it; the full value is in the title. */
+  max-width: 45%;
+}
+
+.hook-matcher-all {
+  color: var(--fg-dim);
+}
+
+.hook-item-command {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+
+.hook-item-command code {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  /* Plain inline text — no input-box chrome, so a list of hooks reads as
+     rows, not a stack of disabled fields. */
+  background: none;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Hooks — Example Code Block (empty state)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.hook-example {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-lg);
+  margin-top: var(--space-md);
+  white-space: pre;
+  overflow-x: auto;
+  text-align: left;
+  line-height: 1.5;
+}

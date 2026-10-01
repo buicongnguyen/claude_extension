@@ -1,0 +1,106 @@
+/**
+ * Skills detail view: full metadata, action buttons, and the SKILL.md body
+ * (frontmatter stripped). Rendered when a skill is selected; the back
+ * button clears the selection to return to the list.
+ */
+import { BackButton, Badge, Button, Tag } from "../../../../../webview/shared/ui";
+import { useApi, useCopyFeedback } from "../../../../../webview/shared/hooks";
+import type { Skill } from "../../../types";
+import { deleteSkill, launchSkillInChat, newSession, openSkillFile } from "../../api";
+import { claudeCodeInstalled, selectedSkill } from "../../model";
+
+/** Strip leading YAML frontmatter from raw SKILL.md content. */
+export function stripFrontmatter(content: string): string {
+  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
+  return match ? match[1] : content;
+}
+
+export interface DetailViewProps {
+  skill: Skill;
+}
+
+export function DetailView({ skill }: DetailViewProps) {
+  const { post } = useApi();
+  const { copied, copy: copyText } = useCopyFeedback();
+  const body = stripFrontmatter(skill.content).trim();
+  // Plugin skills live in a plugin's install dir — read-only from here
+  // (managed via Claude Code's /plugin), so no delete. Mirrors agents/mcp.
+  const isPlugin = skill.scope === "plugin";
+
+  const copyName = (): void => copyText(`/${skill.name}`);
+
+  return (
+    <div class="panel" id="skillsDetailView">
+      <BackButton
+        onClick={() => {
+          selectedSkill.value = null;
+        }}
+      />
+
+      <div class="d-head">
+        <div class="d-title">{skill.name}</div>
+        {skill.description ? <div class="d-subtitle">{skill.description}</div> : null}
+        <div class="d-tags">
+          <Badge text={skill.scope} scope={skill.scope} class="skill-scope-badge" />
+          {skill.tags.map((t) => (
+            <Tag key={t} text={t} title={t} />
+          ))}
+        </div>
+      </div>
+
+      <div class="d-actions">
+        <Button variant="primary" iconName="play" onClick={() => newSession(post)}>
+          Open Claude
+        </Button>
+        {claudeCodeInstalled.value ? (
+          <Button iconName="message-square" onClick={() => launchSkillInChat(post, skill.name)}>
+            Open in Chat
+          </Button>
+        ) : null}
+        <Button iconName="copy" onClick={copyName}>
+          {copied ? "Copied!" : `Copy /${skill.name}`}
+        </Button>
+        <Button iconName="external-link" onClick={() => openSkillFile(post, skill.path)}>
+          Open File
+        </Button>
+        {!isPlugin ? (
+          <Button variant="danger" iconName="trash-2" onClick={() => deleteSkill(post, skill.path)}>
+            Delete
+          </Button>
+        ) : null}
+      </div>
+
+      {isPlugin ? (
+        <div class="skill-readonly-note">
+          Owned by plugin {skill.pluginName ?? ""} — managed by Claude Code's <code>/plugin</code>{" "}
+          command.
+        </div>
+      ) : null}
+
+      <div class="d-section">
+        <div class="d-label">Info</div>
+        <div class="d-kv">
+          <span class="d-k">Scope</span>
+          <span class="d-v">{skill.scope}</span>
+        </div>
+        <div class="d-kv">
+          <span class="d-k">Path</span>
+          <span class="d-v mono">{skill.path}</span>
+        </div>
+        {skill.tags.length ? (
+          <div class="d-kv">
+            <span class="d-k">Tags</span>
+            <span class="d-v">{skill.tags.join(", ")}</span>
+          </div>
+        ) : null}
+      </div>
+
+      {body ? (
+        <div class="d-section">
+          <div class="d-label">Content</div>
+          <div class="skill-content">{body}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

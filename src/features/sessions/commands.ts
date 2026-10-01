@@ -1,0 +1,1263 @@
+/**
+ * Session commands — VS Code interactions for session management.
+ */
+import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
+import * as crypto from "crypto";
+import { execFile, execFileSync } from "child_process";
+import type { Session, SessionDetail } from "./types";
+import { parseSessionDetail, getSessionFile } from "./parser";
+import { deleteSession as deleteSessionState, loadState } from "./state";
+import { getCurrentBranch } from "../../extension/git";
+import { createTerminal, runInTerminal, validateGitRef } from "../../extension/terminal";
+import {
+  resolveWorktree,
+  findWorktreeForBranch,
+  clearWorktreeCache,
+} from "../../extension/worktrees";
+import { registerEphemeralTerminal } from "../../extension/ephemeralSession";
+import { getWorkspace } from "../../extension/workspace";
+import {
+  isClaudeCodeExtensionInstalled,
+  openSessionInExtension,
+  openPromptInExtension,
+  isExtensionEntrypoint,
+} from "../../extension/claudeCodeExtension";
+import { normPath } from "../../core/utils";
+import { PROJECTS_DIR } from "../../core/config";
+import {
+  slugifyProjectPath,
+  validatePortableSession,
+  rewriteSessionId,
+  getKnownProjects,
+  defaultExportFilename,
+  type KnownProject,
+} from "./portable";
+import { writeZip, readZip, type ZipEntry } from "../brain/zip";
+
+/**
+ * Open a project folder in a new VS Code window.
+ */
+export function openProject(projectPath: string): void {
+  vscode.commands.executeCommand(
+    "vscode.openFolder",
+    vscode.Uri.file(projectPath),
+    { forceNewWindow: true },
+  );
+}
+
+/**
+ * Start a new Claude session in a new terminal.
+ */
+export async function newSession(): Promise<void> {
+  // No session yet, so "auto" falls through to terminal (nothing to
+  // entrypoint-match against). extension/ask still honour the user's
+  // explicit choice.
+  const target = await resolveClaudeTarget(undefined);
+  if (target === "cancel") return;
+  if (target === "extension") {
+    await openPromptInExtension("");
+    return;
+  }
+  const term = createTerminal("Claude");
+  term.show();
+  runInTerminal(term, "claude");
+}
+
+/**
+ * Start a new ephemeral Claude session. The session JSONL and matching
+ * history.jsonl rows are deleted when the terminal closes. Claude
+ * settings, skills, agents, hooks, and MCP servers are unchanged —
+ * only the persisted transcript is throwaway.
+ *
+ * Requires a workspace folder: without a project path we cannot scope
+ * the snapshot/diff that drives cleanup.
+ */
+export async function newTempSession(onCleaned?: () => void): Promise<void> {
+  const ws = getWorkspace();
+  if (!ws) {
+    vscode.window.showWarningMessage(
+      "Open a folder first — temp sessions need a workspace to scope the cleanup.",
+    );
+    return;
+  }
+  const term = createTerminal("Claude (temp)", ws);
+  // onCleaned reparses + re-pushes the list on close, since the file watcher
+  // does not reliably observe cleanup's own unlink + history rewrite.
+  registerEphemeralTerminal(term, ws, onCleaned);
+  term.show();
+  runInTerminal(term, "claude");
+}
+
+/**
+ * Continue the most recent Claude Code session in the current workspace.
+ *
+ * CLI path: wraps `claude --continue`, which Claude CLI resolves to the
+ * most recently active session whose stored cwd matches the terminal's
+ * cwd. The terminal is opened at the active workspace folder so the cwd
+ * lookup succeeds; if no workspace is open, Claude is launched at its
+ * default working directory and `--continue` will fall through to "no
+ * recent session" inside Claude.
+ *
+ * Extension path: there is no `--continue` URI equivalent, so we find
+ * the most recent session for this workspace ourselves and fire the
+ * session URI handler with its id. If no session is found (new repo),
+ * we fall through to the terminal.
+ */
+export async function continueLastSession(sessions: Session[]): Promise<void> {
+  const ws = getWorkspace();
+
+  // Locate the latest session in this workspace. Used both for extension
+  // routing and for auto-mode's entrypoint match. `normPath` aligns
+  // casing/separators between workspace fsPath and JSONL-recorded cwd.
+  const wsNorm = ws ? normPath(ws) : "";
+  const latest = wsNorm
+    ? sessions
+        .filter((s) => normPath(s.projectPath) === wsNorm)
+        .reduce<Session | undefined>(
+          (acc, s) => (!acc || s.endTime > acc.endTime ? s : acc),
+          undefined,
+        )
+    : undefined;
+
+  const target = await resolveClaudeTarget(latest);
+  if (target === "cancel") return;
+
+  if (target === "extension" && latest) {
+    await openSessionInExtension(latest.id);
+    return;
+  }
+
+  // Terminal path (or extension-mode with no session to continue). If we
+  // located a `latest` session, surface its name (ai-title → /rename →
+  // id8 chain handled by buildTerminalName) so the tab reads like a
+  // resume tab. If not, fall back to a neutral "continue" label.
+  const cwd = ws;
+  const termName = latest ? buildTerminalName(latest, latest.id) : "continue";
+  const term = createTerminal(termName, cwd || undefined, latest?.id);
+  term.show();
+  runInTerminal(term, "claude --continue");
+}
+
+/**
+ * Copy the resume command for a session to the clipboard and show a notification.
+ */
+export function copyResumeCommand(sessionId: string): void {
+  const cmd = `claude --resume ${sessionId}`;
+  vscode.env.clipboard.writeText(cmd);
+  vscode.window.showInformationMessage(`Copied: ${cmd}`);
+}
+
+/**
+ * Copy the full session transcript as Markdown to the clipboard.
+ * Returns true if successful, false if the session or detail could not be found.
+ */
+export function copyMarkdown(sessionId: string, sessions: Session[]): boolean {
+  const sess = sessions.find((s) => s.id === sessionId);
+  const detail = parseSessionDetail(sessionId, sess);
+  if (!detail) {
+    return false;
+  }
+  const markdown = detail.messages
+    .map((m) => `## ${m.role === "user" ? "You" : "Claude"}\n\n${m.content}`)
+    .join("\n\n---\n\n");
+  vscode.env.clipboard.writeText(markdown);
+  vscode.window.showInformationMessage("Copied as Markdown");
+  return true;
+}
+
+/**
+ * Show a confirmation dialog for deleting a session.
+ * If confirmed, updates state and optionally navigates to the list view.
+ *
+ * Returns the updated user state if deletion was confirmed, or null if cancelled.
+ */
+export async function confirmDeleteSession(
+  sessionId: string,
+  callback?: string,
+): Promise<{ pinned: string[]; deleted: string[]; navigateToList: boolean } | null> {
+  const choice = await vscode.window.showWarningMessage(
+    "Delete this session from the list?",
+    {
+      modal: true,
+      detail: "This will hide the session from your list. Claude's original data won't be modified.",
+    },
+    "Delete",
+  );
+
+  if (choice !== "Delete") {
+    return null;
+  }
+
+  const state = deleteSessionState(sessionId);
+  return {
+    pinned: state.pinned,
+    deleted: state.deleted,
+    navigateToList: callback === "showList",
+  };
+}
+
+/**
+ * Prompt the user for a new session name via an input box.
+ * Pre-fills with the current name (if any) so editing is fast. Empty submission
+ * clears the rename. Returns `null` if the user cancelled, or the trimmed value
+ * (possibly empty string) if they confirmed.
+ */
+export async function promptRenameSession(
+  sessionId: string,
+  sessions: Session[],
+): Promise<string | null> {
+  const sess = sessions.find((s) => s.id === sessionId);
+  const currentName = loadState().renames[sessionId] ?? sess?.name ?? "";
+  const placeholder = sess?.summary
+    ? sess.summary.slice(0, 60)
+    : `session ${sessionId.slice(0, 8)}`;
+
+  const result = await vscode.window.showInputBox({
+    title: "Rename session",
+    prompt: "Enter a new name (leave blank to clear the custom name)",
+    value: currentName,
+    placeHolder: placeholder,
+    validateInput: (value: string) => {
+      if (value.length > 80) return "Name must be 80 characters or fewer";
+      return null;
+    },
+  });
+
+  if (result === undefined) return null;
+  return result;
+}
+
+/**
+ * Resolution target returned by the resume-target router.
+ *
+ * "cancel" exists so the caller can distinguish "user dismissed the
+ * ask QuickPick" from "user picked terminal". Without it, cancelling
+ * the picker would silently fall through to a terminal launch the user
+ * never asked for.
+ */
+type ResumeTarget = "terminal" | "extension" | "cancel";
+
+/**
+ * Sticky one-time flag so the "install Claude Code extension" toast
+ * fires at most once per panel session when the user has set
+ * `resumeIn: extension` but the extension isn't installed. Repeating
+ * the toast on every click would be noise; a quieter silent fallback
+ * beats that.
+ */
+let extensionMissingToastShown = false;
+
+/**
+ * Resolve where a Resume / New / Continue click should land, based on
+ * the user's `claudeManager.sessions.resumeIn` setting and the session's
+ * recorded entrypoint (when there is one). Kept separate from the
+ * callers so the routing logic is unit-testable without a live
+ * terminal or webview.
+ *
+ * Passing `undefined` for `sess` is valid — used by the New action
+ * which has no session to entrypoint-match against. In that case
+ * `auto` falls through to terminal.
+ */
+export async function resolveClaudeTarget(sess: Session | undefined): Promise<ResumeTarget> {
+  const cfg = vscode.workspace.getConfiguration("claudeManager.sessions");
+  const mode = cfg.get<string>("resumeIn", "auto");
+
+  // "ask" wins over everything — the user wants to choose every time.
+  if (mode === "ask") {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: "Terminal", description: "claude --resume in a new terminal" },
+        {
+          label: "Extension chat",
+          description: "Open in the Claude Code chat tab",
+        },
+      ],
+      { title: "Resume session in…", placeHolder: "Pick a destination" },
+    );
+    if (!pick) return "cancel"; // dismissed → caller bails out silently
+    return pick.label === "Extension chat" ? "extension" : "terminal";
+  }
+
+  // Explicit "extension" — honour it when possible, silent fallback
+  // otherwise. One-time toast so the user learns why it fell back.
+  if (mode === "extension") {
+    if (isClaudeCodeExtensionInstalled()) return "extension";
+    if (!extensionMissingToastShown) {
+      extensionMissingToastShown = true;
+      vscode.window.showInformationMessage(
+        "Install the Claude Code extension to resume in its chat tab. Falling back to terminal.",
+      );
+    }
+    return "terminal";
+  }
+
+  // "auto" — follow the session's origin when the extension is present.
+  // The extension records either "claude-vscode" (current build) or
+  // "vscode" (older sessions); isExtensionEntrypoint covers both.
+  // Unknown / CLI entrypoints use the terminal since it always works.
+  if (mode === "auto") {
+    if (isExtensionEntrypoint(sess?.entrypoint) && isClaudeCodeExtensionInstalled()) {
+      return "extension";
+    }
+    return "terminal";
+  }
+
+  // "terminal" and any future unknown value — safest default.
+  return "terminal";
+}
+
+export const CONTINUE_TASK_PROMPT = "Continue the interrupted task from where you stopped. Check existing progress before repeating any actions.";
+
+/**
+ * Resume or fork a Claude session.
+ *
+ * Routing:
+ *   - Different project → open the project window (user re-clicks Resume there).
+ *   - Fork → always terminal (the URI handler has no --fork-session equivalent).
+ *   - forceTerminal → always terminal (the extension chat tab is single-instance,
+ *     so a multi-session restore routed through it would collapse every session
+ *     into one panel and only the last would survive).
+ *   - Worktree session (ran in a still-live worktree) → resume in place, no
+ *     branch check: the worktree already sits on the session's branch.
+ *   - Main-checkout session with a branch mismatch → if the session's branch is
+ *     live in a *different* worktree, offer to open that worktree (git can't
+ *     check the branch out in two places); otherwise offer the in-place
+ *     `git checkout` / Resume-Anyway flow.
+ *   - Same project, no branch issue → consult the resumeIn setting.
+ */
+export async function resumeSession(
+  sessionId: string,
+  fork: boolean,
+  sessions: Session[],
+  forceTerminal = false,
+  submitContinuation = false,
+): Promise<void> {
+  // The id comes from transcript metadata and a webview message, and becomes
+  // a shell argument. Reject metacharacters rather than interpolate them.
+  if (!/^[A-Za-z0-9-]{1,128}$/.test(sessionId)) {
+    vscode.window.showErrorMessage("Cannot resume: the session id is invalid.");
+    return;
+  }
+  const sess = sessions.find((s) => s.id === sessionId);
+  const cwd = sess?.projectPath ?? "";
+  const sessBranch = sess?.branch ?? "";
+  const termName = buildTerminalName(sess, sessionId);
+  const baseCommand = fork
+    ? `claude --resume ${sessionId} --fork-session`
+    : `claude --resume ${sessionId}`;
+  // Fixed ASCII text contains no shell expansions. A CLI argument is submitted
+  // after Claude loads the transcript; no readiness timer types into the shell.
+  const cmd = submitContinuation ? `${baseCommand} "${CONTINUE_TASK_PROMPT}"` : baseCommand;
+  const ws = getWorkspace();
+  const differentProject = Boolean(ws && cwd && normPath(cwd) !== normPath(ws));
+
+  // Fork always uses the terminal — no extension equivalent. Resolve
+  // the target up-front so we know whether a cross-workspace hop needs
+  // to be paired with a delayed URI.
+  const target: ResumeTarget =
+    fork || forceTerminal || submitContinuation ? "terminal" : await resolveClaudeTarget(sess);
+
+  if (target === "cancel") return;
+
+  // Different project → open that project window. If the user wants
+  // extension routing, chain a URI fire in the new window: VS Code
+  // delivers the URI to whichever window most recently claimed focus,
+  // so firing after the project window opens routes correctly. The
+  // 3000ms delay is empirical — enough for Claude Code to finish
+  // activating on cold starts. On faster machines the early fire
+  // still works; the extension queues the URI if its handler is
+  // registered before dispatch.
+  if (differentProject) {
+    openProject(cwd);
+    if (target === "extension") {
+      setTimeout(() => {
+        void openSessionInExtension(sessionId, { newWindow: true }).then((accepted) => {
+          if (!accepted) vscode.window.showErrorMessage("Claude's chat could not accept Resume. Open Manager in the project window and try Resume there.");
+        }).catch(() => vscode.window.showErrorMessage("Claude's chat could not accept Resume. Open Manager in the project window and try Resume there."));
+      }, 3000);
+    }
+    return;
+  }
+
+  // Same project or no workspace. Worktree-aware from here: a session may have
+  // run inside a git worktree, in which case that checkout already holds the
+  // right branch and resuming there needs no `git checkout`. Clear the cache
+  // first so a worktree created/removed since the last resolve is re-detected.
+  clearWorktreeCache();
+  const wt = cwd ? resolveWorktree(cwd) : null;
+  const inLiveWorktree = Boolean(wt && wt.exists && wt.kind !== "main");
+
+  // Branch-mismatch handling only applies to main-checkout sessions. A session
+  // that ran in a live worktree is already on its branch there, so skip the
+  // checkout/mismatch flow entirely and fall through to the router (which
+  // resumes in place — createTerminal opens at cwd = the worktree path).
+  if (!inLiveWorktree && sessBranch && sessBranch !== "HEAD") {
+    const currentBranch = getCurrentBranch();
+    if (currentBranch && currentBranch !== sessBranch) {
+      // git refuses to check out a branch that is already live in another
+      // worktree, so an in-place switch would fail. When the session's branch
+      // lives in a sibling worktree, redirect the resume there instead.
+      const other = findWorktreeForBranch(ws || cwd, sessBranch);
+      if (other && normPath(other.path) !== normPath(cwd)) {
+        const choice = await vscode.window.showWarningMessage(
+          `Branch "${sessBranch}" is checked out in another worktree.`,
+          {
+            modal: true,
+            detail:
+              `This session's branch is live in the worktree at ${other.path}. ` +
+              `Open that worktree and resume there? Your current checkout stays on "${currentBranch}".`,
+          },
+          "Open worktree",
+          "Resume Anyway",
+        );
+        if (!choice) return;
+        if (choice === "Open worktree") {
+          const term = createTerminal(termName, other.path, sessionId);
+          term.show();
+          runInTerminal(term, cmd);
+          return;
+        }
+        // "Resume Anyway" falls through to the router below (resume in place).
+      } else {
+        const choice = await vscode.window.showWarningMessage(
+          `This session was on branch "${sessBranch}", but you're on "${currentBranch}".`,
+          {
+            modal: true,
+            detail: "The session may not work correctly on a different branch.",
+          },
+          "Switch & Resume",
+          "Resume Anyway",
+        );
+
+        if (!choice) {
+          return;
+        }
+
+        if (choice === "Switch & Resume") {
+          const safe = validateGitRef(sessBranch);
+          if (!safe) {
+            vscode.window.showErrorMessage(
+              `Refusing to switch branches: "${sessBranch}" is not a valid git ref name.`,
+            );
+            return;
+          }
+          try {
+            await new Promise<void>((resolve, reject) => {
+              execFile("git", ["checkout", safe], {
+                cwd: cwd || ws || undefined, windowsHide: true, timeout: 10000,
+              }, (error) => error ? reject(error) : resolve());
+            });
+          } catch {
+            vscode.window.showErrorMessage(`Could not switch to branch "${safe}". Resolve the Git checkout conflict, then try Resume again.`);
+            return;
+          }
+          const term = createTerminal(termName, cwd, sessionId);
+          term.show();
+          runInTerminal(term, cmd);
+          return;
+        }
+        // "Resume Anyway" falls through to the router below.
+      }
+    }
+  }
+
+  if (target === "extension") {
+    let accepted = false;
+    try { accepted = await openSessionInExtension(sessionId); } catch { /* offer recovery below */ }
+    if (accepted) return;
+    const choice = await vscode.window.showWarningMessage(
+      "Claude's chat could not accept Resume.",
+      { modal: true, detail: "You can resume the history in a new terminal. Close any existing Claude client for this session first. The terminal requires the Claude Code CLI." },
+      "Resume in terminal",
+    );
+    if (choice !== "Resume in terminal") return;
+  }
+
+  const term = createTerminal(termName, cwd, sessionId);
+  term.show();
+  runInTerminal(term, cmd);
+}
+
+const sessionRestartsInProgress = new Set<string>();
+
+/** Explicit continuation after the usage reset. Opening history alone does
+ * not send a turn, and the official chat has no external submit command. */
+export async function continueStoppedTask(sessionId: string, sessions: Session[]): Promise<void> {
+  if (sessionRestartsInProgress.has(sessionId)) return;
+  sessionRestartsInProgress.add(sessionId);
+  try {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      vscode.window.showErrorMessage("Session not found. Refresh Manager before continuing.");
+      return;
+    }
+    const workspace = getWorkspace();
+    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath)) {
+      vscode.window.showInformationMessage("Open this session's project first, then choose Continue task there.");
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      "Continue this stopped task?",
+      { modal: true, detail: "Wait until your usage is available again. Close the existing Claude chat or exit its CLI for this session first. Manager will open the saved conversation in a new terminal and submit a request to continue from where it stopped. This requires the Claude Code CLI. To keep using the current chat instead, cancel and send Continue from where you stopped in that chat." },
+      "Old session closed — continue",
+    );
+    if (choice !== "Old session closed — continue") return;
+    await resumeSession(sessionId, false, sessions, true, true);
+  } finally {
+    sessionRestartsInProgress.delete(sessionId);
+  }
+}
+
+/** A quota-stopped chat may retain the old login in memory. Reopen its history
+ * in a fresh process only after the user has closed it and switched accounts. */
+export async function resumeAfterAccountSwitch(sessionId: string, sessions: Session[]): Promise<void> {
+  if (sessionRestartsInProgress.has(sessionId)) return;
+  sessionRestartsInProgress.add(sessionId);
+  try {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      vscode.window.showErrorMessage("Session not found. Refresh Manager before resuming.");
+      return;
+    }
+    const workspace = getWorkspace();
+    if (workspace && session.projectPath && normPath(workspace) !== normPath(session.projectPath)) {
+      vscode.window.showInformationMessage("Open this session's project first, then choose Resume after account switch there.");
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      "Resume with a fresh Claude client?",
+      { modal: true, detail: "First close this session's Claude chat or exit its Claude CLI, then switch to the account you want in Manager. This opens the saved history in a new terminal and requires the Claude Code CLI. At Claude's prompt, run /status to verify the account, then type Continue from where you stopped. Reopening history does not submit that request automatically." },
+      "Old session closed — resume",
+    );
+    if (choice !== "Old session closed — resume") return;
+    await resumeSession(sessionId, false, sessions, true);
+  } finally {
+    sessionRestartsInProgress.delete(sessionId);
+  }
+}
+
+/**
+ * Recreate a Claude-created worktree that was removed from disk, then resume
+ * the session inside it. Claude Code places its worktrees at
+ * `<repoRoot>/.claude/worktrees/<name>`, so the repo root is recovered from
+ * that convention and `git worktree add <path> <branch>` is run in it.
+ *
+ * Guard rails, in order:
+ *   - the session must exist and its recorded path must live under
+ *     `.claude/worktrees/` — we only auto-recreate Claude's own worktrees,
+ *     never an arbitrary user-created one whose layout we can't assume;
+ *   - if the worktree directory is still on disk, resume in it rather than
+ *     recreate (git would reject an existing path anyway);
+ *   - the branch must pass validateGitRef — it flows into a git argument;
+ *   - the derived repo root must still exist and be a git repo.
+ *
+ * Security: the git invocation uses an argument array with no shell, so a path
+ * or branch containing shell metacharacters cannot inject a command. On failure
+ * the git stderr is surfaced verbatim.
+ */
+export async function createWorktreeForSession(
+  sessionId: string,
+  sessions: Session[],
+): Promise<void> {
+  const sess = sessions.find((s) => s.id === sessionId);
+  if (!sess) {
+    vscode.window.showErrorMessage("Session not found in the current list.");
+    return;
+  }
+
+  const wtPath = sess.projectPath;
+  const termName = buildTerminalName(sess, sessionId);
+  const cmd = `claude --resume ${sessionId}`;
+
+  // Worktree still on disk → nothing to recreate, just resume in it.
+  if (wtPath && fs.existsSync(wtPath)) {
+    const term = createTerminal(termName, wtPath, sessionId);
+    term.show();
+    runInTerminal(term, cmd);
+    return;
+  }
+
+  // Recover the repo root from Claude's worktree convention. Anything not under
+  // `.claude/worktrees/` we refuse: recreating an arbitrary user worktree is
+  // out of scope and its intended layout is unknown. normPath aligns Windows
+  // separators before the marker search.
+  const marker = "/.claude/worktrees/";
+  const norm = normPath(wtPath);
+  const idx = norm.indexOf(marker);
+  if (!wtPath || idx === -1) {
+    vscode.window.showErrorMessage(
+      "This session's folder isn't a Claude-created worktree, so it can't be recreated automatically.",
+    );
+    return;
+  }
+  const repoRoot = norm.slice(0, idx);
+
+  const branch = validateGitRef(sess.branch);
+  if (!branch) {
+    vscode.window.showErrorMessage(
+      `Cannot recreate worktree: "${sess.branch}" is not a valid git branch name.`,
+    );
+    return;
+  }
+
+  if (!fs.existsSync(repoRoot) || !fs.existsSync(path.join(repoRoot, ".git"))) {
+    vscode.window.showErrorMessage(
+      `Cannot recreate worktree: the repository at ${repoRoot} no longer exists on this machine.`,
+    );
+    return;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    "Recreate this session's worktree?",
+    {
+      modal: true,
+      detail:
+        `The worktree was removed from disk. Claude Code Manager will recreate it at:\n\n` +
+        `${norm}\n\n` +
+        `on branch "${branch}" (from the repository at ${repoRoot}), then resume the session there.`,
+    },
+    "Recreate & Resume",
+  );
+  if (confirm !== "Recreate & Resume") return;
+
+  try {
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", norm, branch], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10000,
+      windowsHide: true,
+    });
+  } catch (err) {
+    // Prefer git's own stderr — it explains "already exists", "invalid
+    // reference", etc. better than the generic spawn error message.
+    const stderr =
+      err && typeof err === "object" && "stderr" in err
+        ? String((err as { stderr?: unknown }).stderr ?? "")
+        : "";
+    const message = stderr.trim() || (err instanceof Error ? err.message : String(err));
+    vscode.window.showErrorMessage(`Failed to recreate worktree: ${message}`);
+    return;
+  }
+
+  const term = createTerminal(termName, norm, sessionId);
+  term.show();
+  runInTerminal(term, cmd);
+}
+
+// VS Code terminal tabs get unreadable past ~24 chars in the side editor —
+// the tail truncates and the user can't tell sessions apart. No "Claude: "
+// prefix: the tab icon already identifies it.
+const MAX_TERMINAL_NAME_LENGTH = 24;
+
+/**
+ * Build a human-friendly terminal name for a session.
+ * Uses the user's rename if set, otherwise a short session-id label.
+ * Truncated to MAX_TERMINAL_NAME_LENGTH with an ellipsis. We deliberately
+ * avoid the first prompt — it's almost always too long for a terminal tab
+ * and unhelpful when truncated.
+ */
+function buildTerminalName(sess: Session | undefined, sessionId: string): string {
+  // `||`, not `??`: Session.name is `string` and is the empty string for a
+  // session nobody (and no parser fallback) ever named. `??` let that empty
+  // string through, and `createTerminal({ name: "" })` is treated by VS Code
+  // as no name at all — the tab silently fell back to the process name, which
+  // for the bundled CLI is the version directory it lives in ("2.1.276").
+  const raw = sess?.name || sessionId.slice(0, 8);
+  return raw.length > MAX_TERMINAL_NAME_LENGTH
+    ? raw.slice(0, MAX_TERMINAL_NAME_LENGTH - 1) + "…"
+    : raw;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Last-used folder memory for export/import dialogs.
+// ─────────────────────────────────────────────────────────────────────
+//
+// Stored in extension globalState so the choice survives across workspaces.
+// Two separate keys because exporting and importing tend to use different
+// folders in practice (export → shared/Sync folder, import → Downloads).
+// First-ever use returns undefined so the OS file picker shows its default.
+
+/** Storage key for the last folder used as an export target. */
+const STORAGE_KEY_LAST_EXPORT_DIR = "claudeManager.lastExportDir";
+/** Storage key for the last folder used as an import source. */
+const STORAGE_KEY_LAST_IMPORT_DIR = "claudeManager.lastImportDir";
+
+/**
+ * Module-level handle to the extension's persistent storage. Set once at
+ * activate-time via `setSessionStorage`. Optional so unit tests can run
+ * without a context — get/set become no-ops.
+ */
+let _storage: vscode.Memento | undefined;
+
+/**
+ * Wire the extension's globalState into the commands module. Called from
+ * activate(). Without this the export/import dialogs still work but never
+ * remember the last folder.
+ */
+export function setSessionStorage(storage: vscode.Memento): void {
+  _storage = storage;
+}
+
+/**
+ * Read a stored directory path, returning undefined if either the storage
+ * is unwired (tests) or the path no longer exists on disk. Validating
+ * existence prevents the dialog from opening at a stale / unmounted path.
+ */
+function readLastDir(key: string): string | undefined {
+  const stored = _storage?.get<string>(key);
+  if (!stored) return undefined;
+  try {
+    return fs.statSync(stored).isDirectory() ? stored : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Persist the parent directory of a file the user just chose. */
+function rememberLastDir(key: string, filePath: string): void {
+  if (!_storage) return;
+  const dir = path.dirname(filePath);
+  void _storage.update(key, dir);
+}
+
+/**
+ * Export a single session to a portable .jsonl file the user can carry to
+ * another machine. The exported file is the raw session JSONL with no
+ * rewriting — the import flow on the destination machine handles the
+ * sessionId rewrite + slug placement.
+ *
+ * Steps:
+ *   1. Resolve the source file path from the session's id.
+ *   2. Open a Save dialog seeded with a friendly default filename and the
+ *      last folder the user exported into (if it still exists).
+ *   3. Copy the bytes verbatim.
+ *   4. Remember the chosen folder for next time.
+ *
+ * Failures (file missing, permission denied, etc.) surface via a VS Code
+ * error message — never silently swallowed.
+ */
+export async function exportSessionFile(
+  sessionId: string,
+  sessions: Session[],
+): Promise<void> {
+  const sess = sessions.find((s) => s.id === sessionId);
+  if (!sess) {
+    vscode.window.showErrorMessage("Session not found in the current list.");
+    return;
+  }
+
+  const sourcePath = resolveSessionFilePath(sess);
+  if (!sourcePath) {
+    vscode.window.showErrorMessage(
+      `Could not locate the session file for "${sess.name || sess.id.slice(0, 8)}".`,
+    );
+    return;
+  }
+
+  // Seed the dialog with the last export folder if we still have one.
+  // Falls back to the OS default if the stored folder is missing.
+  const lastDir = readLastDir(STORAGE_KEY_LAST_EXPORT_DIR);
+  const defaultName = defaultExportFilename(sess);
+  const defaultUri = vscode.Uri.file(
+    lastDir ? path.join(lastDir, defaultName) : defaultName,
+  );
+
+  const targetUri = await vscode.window.showSaveDialog({
+    title: "Export Claude session",
+    defaultUri,
+    filters: { "Claude Session": ["jsonl"] },
+    saveLabel: "Export",
+  });
+  if (!targetUri) return; // user cancelled
+
+  try {
+    fs.copyFileSync(sourcePath, targetUri.fsPath);
+    rememberLastDir(STORAGE_KEY_LAST_EXPORT_DIR, targetUri.fsPath);
+    vscode.window.showInformationMessage(
+      `Exported to ${path.basename(targetUri.fsPath)}`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to export session: ${message}`);
+  }
+}
+
+/**
+ * Bulk export every session in `ids` as a single STORE-only zip
+ * with a `manifest.json` listing each entry's session metadata.
+ * Sessions whose jsonl can't be located on disk are skipped and
+ * counted in the result toast — never silently dropped.
+ *
+ * Uses the same writeZip helper Brain export does: STORE-only,
+ * zero compression, no new dependency. Archives ~50 KB per session
+ * uncompressed, fine for a few hundred at a time.
+ */
+export async function bulkExportSessionFiles(
+  ids: string[],
+  sessions: Session[],
+): Promise<void> {
+  const targets: Array<{ sess: Session; filePath: string }> = [];
+  const missing: string[] = [];
+  for (const id of ids) {
+    const sess = sessions.find((s) => s.id === id);
+    if (!sess) {
+      missing.push(id);
+      continue;
+    }
+    const filePath = resolveSessionFilePath(sess);
+    if (!filePath) {
+      missing.push(sess.name || sess.id.slice(0, 8));
+      continue;
+    }
+    targets.push({ sess, filePath });
+  }
+
+  if (targets.length === 0) {
+    vscode.window.showErrorMessage(
+      "No selected sessions could be located on disk.",
+    );
+    return;
+  }
+
+  const lastDir = readLastDir(STORAGE_KEY_LAST_EXPORT_DIR);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const defaultName = `claude-sessions-${stamp}.zip`;
+  const defaultUri = vscode.Uri.file(
+    lastDir ? path.join(lastDir, defaultName) : defaultName,
+  );
+
+  const targetUri = await vscode.window.showSaveDialog({
+    title: `Export ${targets.length} session${targets.length === 1 ? "" : "s"}`,
+    defaultUri,
+    filters: { "Zip archive": ["zip"] },
+    saveLabel: "Export",
+  });
+  if (!targetUri) return; // user cancelled
+
+  const manifest = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    count: targets.length,
+    sessions: targets.map(({ sess }) => ({
+      id: sess.id,
+      file: `${sess.id}.jsonl`,
+      name: sess.name,
+      project: sess.project,
+      projectPath: sess.projectPath,
+      branch: sess.branch,
+      startTime: sess.startTime,
+      endTime: sess.endTime,
+      messageCount: sess.messageCount,
+    })),
+  };
+
+  const entries: ZipEntry[] = [];
+  entries.push({
+    path: "manifest.json",
+    data: Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"),
+  });
+  for (const { sess, filePath } of targets) {
+    try {
+      entries.push({
+        path: `sessions/${sess.id}.jsonl`,
+        data: fs.readFileSync(filePath),
+      });
+    } catch {
+      // Disappeared between scan + read — drop it. Manifest already
+      // counted, but the zip will be missing the file. Toast notes
+      // any partial export below.
+    }
+  }
+
+  try {
+    fs.writeFileSync(targetUri.fsPath, writeZip(entries));
+    rememberLastDir(STORAGE_KEY_LAST_EXPORT_DIR, targetUri.fsPath);
+    const tail = missing.length > 0
+      ? ` (${missing.length} skipped — file missing)`
+      : "";
+    vscode.window.showInformationMessage(
+      `Exported ${targets.length} session${targets.length === 1 ? "" : "s"} to ${path.basename(targetUri.fsPath)}${tail}.`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Bulk export failed: ${msg}`);
+  }
+}
+
+/**
+ * Find the on-disk path of a session's JSONL file. Prefers the parser's
+ * authoritative sessionId→path index, which is the truth on disk. Falls
+ * back to slug reconstruction from projectPath only if the index has no
+ * entry — covers the rare case where the index is stale on a fresh write.
+ *
+ * The index lookup matters when projectPath disagrees with the on-disk
+ * slug. e.g. on Cursor+WSL the history.jsonl `project` field can record
+ * a cwd that slugifies differently than the directory Claude CLI created.
+ */
+function resolveSessionFilePath(sess: Session): string | null {
+  const indexed = getSessionFile(sess.id);
+  if (indexed && fs.existsSync(indexed)) return indexed;
+  if (!sess.projectPath) return null;
+  const slug = slugifyProjectPath(sess.projectPath);
+  const candidate = path.join(PROJECTS_DIR, slug, `${sess.id}.jsonl`);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+/**
+ * Import a portable session file. Walks the user through:
+ *
+ *   1. File picker — restricted to .jsonl
+ *   2. Validation — parse, count messages, reject mixed/empty/corrupt files
+ *   3. Project picker — Current workspace (default) or any other project
+ *      this extension already knows about
+ *   4. Path verification — the chosen project's directory must exist on
+ *      this machine, otherwise `claude --resume` cannot launch from it
+ *   5. Confirmation — show the message count + target project so the user
+ *      sees exactly what they're about to import
+ *   6. Write — generate fresh UUID, rewrite internal sessionId, place the
+ *      file under the target project's slug dir
+ *   7. Launch — open a terminal at the target path and run claude --resume
+ *
+ * The session reload signal is sent via the `onImportComplete` callback so
+ * the view provider can re-parse and refresh the webview.
+ */
+export async function importSessionFile(
+  sessions: Session[],
+  onImportComplete: () => void,
+): Promise<void> {
+  // 1. File picker — open at the last folder we imported from, if any.
+  const lastImportDir = readLastDir(STORAGE_KEY_LAST_IMPORT_DIR);
+  const picked = await vscode.window.showOpenDialog({
+    title: "Import Claude session",
+    defaultUri: lastImportDir ? vscode.Uri.file(lastImportDir) : undefined,
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "Claude Session": ["jsonl"] },
+    openLabel: "Import",
+  });
+  if (!picked || picked.length === 0) return; // user cancelled
+
+  const sourcePath = picked[0].fsPath;
+  // Remember the source folder before we even validate — the user picked
+  // a location they wanted, regardless of whether the file was valid.
+  rememberLastDir(STORAGE_KEY_LAST_IMPORT_DIR, sourcePath);
+
+  // 2. Validation
+  let content: string;
+  try {
+    content = fs.readFileSync(sourcePath, "utf-8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Could not read file: ${message}`);
+    return;
+  }
+
+  const validation = validatePortableSession(content);
+  if (!validation.ok) {
+    vscode.window.showErrorMessage(`Cannot import: ${validation.reason}`);
+    return;
+  }
+
+  // 3. Project picker
+  const target = await pickImportTarget(sessions);
+  if (!target) return; // user cancelled
+
+  // 4. Path verification — the target dir must exist on this machine
+  // because `claude --resume` is launched from a terminal at that cwd.
+  if (!fs.existsSync(target.path)) {
+    vscode.window.showErrorMessage(
+      `The chosen project path does not exist on this machine:\n${target.path}\n\nPick a different project or choose Current Workspace.`,
+    );
+    return;
+  }
+
+  // 5. Confirmation — give the user one last chance to abort with the
+  // message count + chosen project visible.
+  const confirm = await vscode.window.showInformationMessage(
+    `Import session into ${target.name}?`,
+    {
+      modal: true,
+      detail:
+        `${validation.userMessageCount} user message${validation.userMessageCount === 1 ? "" : "s"}, ` +
+        `${validation.lineCount} total entries.\n\n` +
+        `Target: ${target.path}\n\n` +
+        `Claude will resume the conversation in a new terminal.`,
+    },
+    "Import & Resume",
+  );
+  if (confirm !== "Import & Resume") return;
+
+  // 6. Write
+  const newId = crypto.randomUUID();
+  const slug = slugifyProjectPath(target.path);
+  const targetDir = path.join(PROJECTS_DIR, slug);
+  const targetFile = path.join(targetDir, `${newId}.jsonl`);
+
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    const rewritten = rewriteSessionId(content, validation.sessionId, newId);
+    fs.writeFileSync(targetFile, rewritten);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to write imported session: ${message}`);
+    return;
+  }
+
+  // 7. Launch
+  const term = createTerminal(`imported ${newId.slice(0, 8)}`, target.path, newId);
+  term.show();
+  runInTerminal(term, `claude --resume ${newId}`);
+
+  // Tell the view provider to re-scan so the imported session shows up
+  // in the list (it lives under target.path's slug, not necessarily the
+  // current workspace).
+  onImportComplete();
+}
+
+/**
+ * Bulk import sessions from one or more portable files, without disturbing
+ * any session already on disk. Accepts either the `.zip` archive produced by
+ * bulk export (a `manifest.json` + `sessions/<id>.jsonl` members) or one or
+ * more loose `.jsonl` files — the user can multi-select and mix both.
+ *
+ * Placement is hybrid, because a session's original project path frequently
+ * does not exist on the destination machine:
+ *   - If a session carries an original project path (from the zip manifest)
+ *     and that directory still exists here, it is restored under that
+ *     project's slug — it lands exactly where it came from.
+ *   - Otherwise it is routed to a single fallback project the user picks once
+ *     (defaults to the current workspace). Per-message `cwd` fields are not
+ *     validated by Claude (see portable.ts), so a relocated session still
+ *     resumes cleanly from the fallback directory.
+ *
+ * Every imported session is written with a fresh UUID (both filename and
+ * internal `sessionId`), so an import can never collide with — or overwrite —
+ * an existing session, and pinned/deleted state keyed by id stays intact.
+ * Unlike single import this does not auto-resume: one terminal per session
+ * does not scale, so the user resumes individually from the refreshed list.
+ */
+export async function importMultipleSessionFiles(
+  sessions: Session[],
+  onImportComplete: () => void,
+): Promise<void> {
+  // 1. File picker — accept the export zip and/or loose jsonl, multi-select.
+  const lastImportDir = readLastDir(STORAGE_KEY_LAST_IMPORT_DIR);
+  const picked = await vscode.window.showOpenDialog({
+    title: "Import Claude sessions",
+    defaultUri: lastImportDir ? vscode.Uri.file(lastImportDir) : undefined,
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: true,
+    filters: { "Claude sessions": ["zip", "jsonl"] },
+    openLabel: "Import",
+  });
+  if (!picked || picked.length === 0) return; // user cancelled
+
+  rememberLastDir(STORAGE_KEY_LAST_IMPORT_DIR, picked[0].fsPath);
+
+  // 2. Expand every picked file into candidate sessions. A zip yields its
+  //    `sessions/*.jsonl` members (with the manifest's project path as a
+  //    restore hint); a loose file is a single candidate with no hint.
+  type Candidate = { content: string; originalPath?: string; label: string };
+  const candidates: Candidate[] = [];
+  let skipped = 0;
+
+  for (const uri of picked) {
+    const filePath = uri.fsPath;
+    if (filePath.toLowerCase().endsWith(".zip")) {
+      let entries: ZipEntry[];
+      try {
+        entries = readZip(fs.readFileSync(filePath));
+      } catch {
+        skipped++; // not a readable STORE-only archive
+        continue;
+      }
+      // manifest.json maps "<id>.jsonl" → original projectPath. A zip without
+      // one still imports; those sessions just always take the fallback path.
+      const pathByFile = new Map<string, string>();
+      const manifest = entries.find((e) => e.path === "manifest.json");
+      if (manifest) {
+        try {
+          const parsed = JSON.parse(manifest.data.toString("utf-8")) as {
+            sessions?: Array<{ file?: string; projectPath?: string }>;
+          };
+          for (const s of parsed.sessions ?? []) {
+            if (typeof s.file === "string" && typeof s.projectPath === "string") {
+              pathByFile.set(s.file, s.projectPath);
+            }
+          }
+        } catch {
+          // Corrupt manifest — proceed with no hints, still importable.
+        }
+      }
+      for (const e of entries) {
+        if (!e.path.startsWith("sessions/") || !e.path.endsWith(".jsonl")) continue;
+        const base = path.posix.basename(e.path);
+        candidates.push({
+          content: e.data.toString("utf-8"),
+          originalPath: pathByFile.get(base),
+          label: base,
+        });
+      }
+    } else {
+      try {
+        candidates.push({
+          content: fs.readFileSync(filePath, "utf-8"),
+          label: path.basename(filePath),
+        });
+      } catch {
+        skipped++; // unreadable file
+      }
+    }
+  }
+
+  // 3. Validate. Drop anything that is not a real single-session transcript.
+  type Valid = { content: string; sessionId: string; originalPath?: string };
+  const valid: Valid[] = [];
+  for (const c of candidates) {
+    const v = validatePortableSession(c.content);
+    if (!v.ok) {
+      skipped++;
+      continue;
+    }
+    valid.push({ content: c.content, sessionId: v.sessionId, originalPath: c.originalPath });
+  }
+
+  if (valid.length === 0) {
+    vscode.window.showErrorMessage(
+      `No importable sessions found${skipped > 0 ? ` (${skipped} skipped).` : "."}`,
+    );
+    return;
+  }
+
+  // 4. Resolve placement. A session restores to its original project only
+  //    when that directory still exists here; otherwise it needs the
+  //    fallback project, which we ask for once.
+  const needFallback = valid.some((s) => !s.originalPath || !fs.existsSync(s.originalPath));
+  let fallback: KnownProject | null = null;
+  if (needFallback) {
+    fallback = await pickImportTarget(sessions);
+    if (!fallback) return; // user cancelled
+    if (!fs.existsSync(fallback.path)) {
+      vscode.window.showErrorMessage(
+        `The chosen project path does not exist on this machine:\n${fallback.path}`,
+      );
+      return;
+    }
+  }
+
+  const targets = valid.map((s) => {
+    const useOriginal = Boolean(s.originalPath && fs.existsSync(s.originalPath));
+    return {
+      ...s,
+      projectPath: useOriginal ? (s.originalPath as string) : (fallback as KnownProject).path,
+      restored: useOriginal,
+    };
+  });
+  const restoredCount = targets.filter((t) => t.restored).length;
+  const fallbackCount = targets.length - restoredCount;
+
+  // 5. Confirmation — show the full breakdown before touching disk.
+  const detailLines: string[] = [];
+  if (restoredCount > 0) {
+    detailLines.push(
+      `${restoredCount} restored to their original project${restoredCount === 1 ? "" : "s"}.`,
+    );
+  }
+  if (fallbackCount > 0 && fallback) {
+    detailLines.push(`${fallbackCount} imported into ${fallback.name}.`);
+  }
+  if (skipped > 0) detailLines.push(`${skipped} skipped (not a valid session).`);
+  detailLines.push("", "Existing sessions are untouched. Nothing is overwritten.");
+
+  const confirm = await vscode.window.showInformationMessage(
+    `Import ${targets.length} session${targets.length === 1 ? "" : "s"}?`,
+    { modal: true, detail: detailLines.join("\n") },
+    "Import",
+  );
+  if (confirm !== "Import") return;
+
+  // 6. Write each session under a fresh UUID so it never collides with — or
+  //    overwrites — an existing session on disk.
+  let written = 0;
+  let failed = 0;
+  for (const t of targets) {
+    const newId = crypto.randomUUID();
+    const targetDir = path.join(PROJECTS_DIR, slugifyProjectPath(t.projectPath));
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(targetDir, `${newId}.jsonl`),
+        rewriteSessionId(t.content, t.sessionId, newId),
+      );
+      written++;
+    } catch {
+      failed++;
+    }
+  }
+
+  // 7. Report + refresh. No terminals launched — the user resumes from the
+  //    list, which the reload callback repopulates.
+  if (written > 0) {
+    const tail = failed > 0 ? ` (${failed} failed to write)` : "";
+    vscode.window.showInformationMessage(
+      `Imported ${written} session${written === 1 ? "" : "s"}${tail}.`,
+    );
+    onImportComplete();
+  } else {
+    vscode.window.showErrorMessage("Failed to import any sessions.");
+  }
+}
+
+/**
+ * Show a QuickPick that lets the user choose a target project for an
+ * import. The current workspace (if any) is offered as the default top
+ * entry. Falls back to "no workspace open" if neither is available.
+ *
+ * Returns the chosen {name, path} or null if the user cancelled.
+ */
+async function pickImportTarget(sessions: Session[]): Promise<KnownProject | null> {
+  const ws = getWorkspace();
+  const known = getKnownProjects(sessions);
+  // Strip the current workspace from "known" so it does not appear twice.
+  const others = ws ? known.filter((p) => normPath(p.path) !== normPath(ws)) : known;
+
+  type Item = vscode.QuickPickItem & { project?: KnownProject };
+  const items: Item[] = [];
+
+  if (ws) {
+    items.push({
+      label: "$(folder-active) Current Workspace",
+      description: path.basename(ws),
+      detail: ws,
+      project: { name: path.basename(ws), path: ws },
+    });
+  }
+
+  if (others.length > 0) {
+    items.push({ label: "Other Projects", kind: vscode.QuickPickItemKind.Separator });
+    for (const p of others) {
+      items.push({
+        label: `$(folder) ${p.name}`,
+        detail: p.path,
+        project: p,
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    vscode.window.showErrorMessage(
+      "No workspace open and no known projects to import into. Open a folder first.",
+    );
+    return null;
+  }
+
+  const choice = await vscode.window.showQuickPick(items, {
+    title: "Import session into which project?",
+    placeHolder: "Pick the target project — its directory must exist on this machine",
+    matchOnDetail: true,
+  });
+  return choice?.project ?? null;
+}

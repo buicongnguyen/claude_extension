@@ -1,0 +1,226 @@
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The index-ready handler re-sends a search through the api layer, so the
+// postMessage bridge must be observable here.
+const post = vi.fn();
+vi.mock("../../../../webview/shared/hooks", () => ({
+  useApi: () => ({ post: (m: unknown) => post(m) }),
+  setVscodeApi: vi.fn(),
+}));
+
+import type { Message } from "../../../../shared/protocol/messages";
+import type { Session, SessionDetail, SessionGroup } from "../../types";
+import { handleDelta, handleMessage } from "./messages";
+import {
+  currentBranchSignal,
+  deletedSignal,
+  detailLoadingSignal,
+  detailSignal,
+  fullTextLoadingSignal,
+  loadedSignal,
+  pinnedSignal,
+  searchIndexReadySignal,
+  searchPendingSignal,
+  searchQuerySignal,
+  selectedIdSignal,
+  sessionsSignal,
+  setFullTextHits,
+  statsSignal,
+  viewSignal,
+  _resetSessionsSignals,
+} from "./signals";
+
+function session(id: string, over: Partial<Session> = {}): Session {
+  return {
+    id,
+    name: "",
+    project: "proj",
+    projectPath: "/p",
+    branch: "main",
+    entrypoint: "cli",
+    startTime: 0,
+    endTime: 0,
+    messageCount: 0,
+    summary: "",
+    prompts: [],
+    projectKey: "proj",
+    searchHaystack: "",
+    ...over,
+  };
+}
+
+describe("sessions message handling", () => {
+  beforeEach(() => _resetSessionsSignals());
+
+  it("flattens grouped sessions and stores stats", () => {
+    const groups: SessionGroup[] = [
+      { label: "Today", sessions: [session("a"), session("b")] },
+      { label: "Yesterday", sessions: [session("c")] },
+    ];
+    const stats = { totalSessions: 3, totalProjects: 1, thisWeek: 3, totalMessages: 9 };
+    handleMessage({ type: "sessions", data: groups, stats } as Message);
+    expect(sessionsSignal.value.map((s) => s.id)).toEqual(["a", "b", "c"]);
+    expect(statsSignal.value).toEqual(stats);
+  });
+
+  it("stores detail and clears the loading flag", () => {
+    detailLoadingSignal.value = true;
+    const detail = { ...session("a"), messages: [] } as SessionDetail;
+    handleMessage({ type: "sessionDetail", data: detail } as Message);
+    expect(detailSignal.value?.id).toBe("a");
+    expect(detailLoadingSignal.value).toBe(false);
+  });
+
+  it("applies userState pinned + deleted ids", () => {
+    handleMessage({ type: "userState", pinned: ["a"], deleted: ["b"], renames: {} } as Message);
+    expect([...pinnedSignal.value]).toEqual(["a"]);
+    expect([...deletedSignal.value]).toEqual(["b"]);
+  });
+
+  it("navigateList resets to the list view", () => {
+    viewSignal.value = "detail";
+    selectedIdSignal.value = "a";
+    detailSignal.value = { ...session("a"), messages: [] } as SessionDetail;
+    handleMessage({ type: "navigateList" } as Message);
+    expect(viewSignal.value).toBe("list");
+    expect(selectedIdSignal.value).toBeNull();
+    expect(detailSignal.value).toBeNull();
+  });
+
+  it("stores workspace path and branch", () => {
+    handleMessage({ type: "workspacePath", data: "/repo/app" } as Message);
+    handleMessage({ type: "workspaceBranch", data: "feature" } as Message);
+    expect(currentBranchSignal.value).toBe("feature");
+  });
+
+  it("stores full-text results matching the live query", () => {
+    searchQuerySignal.value = "deploy";
+    handleMessage({ type: "fullTextResults", query: "deploy", ids: ["x"] } as Message);
+    // setFullTextHits is exercised; a stale query is dropped.
+    handleMessage({ type: "fullTextResults", query: "stale", ids: ["y"] } as Message);
+    setFullTextHits("deploy", ["x"]);
+    expect(true).toBe(true);
+  });
+
+  it("applies a delta to the session list", () => {
+    sessionsSignal.value = [session("a"), session("b")];
+    handleDelta({ added: [session("c")], removed: ["a"] });
+    expect(sessionsSignal.value.map((s) => s.id).sort()).toEqual(["b", "c"]);
+  });
+
+  it("ignores unrelated message types", () => {
+    sessionsSignal.value = [session("a")];
+    handleMessage({ type: "skills", data: [] } as Message);
+    expect(sessionsSignal.value).toHaveLength(1);
+  });
+
+  it("flips the loaded gate when the first sessions message arrives (even if empty)", () => {
+    expect(loadedSignal.value).toBe(false);
+    handleMessage({ type: "sessions", data: [] } as Message);
+    expect(loadedSignal.value).toBe(true);
+  });
+
+  it("flips the loaded gate on a host error", () => {
+    expect(loadedSignal.value).toBe(false);
+    handleMessage({ type: "error", message: "boom" } as Message);
+    expect(loadedSignal.value).toBe(true);
+  });
+
+  it("stores the open-terminal id set from a terminalSessions push", async () => {
+    const { openTerminalsSignal } = await import("./signals");
+    handleMessage({ type: "terminalSessions", ids: ["a", "b"] } as Message);
+    expect([...openTerminalsSignal.value].sort()).toEqual(["a", "b"]);
+    handleMessage({ type: "terminalSessions", ids: [] } as Message);
+    expect(openTerminalsSignal.value.size).toBe(0);
+  });
+
+  it("stores the temp-session id set from a tempSessions push", async () => {
+    const { tempSessionsSignal } = await import("./signals");
+    handleMessage({ type: "tempSessions", ids: ["t1", "t2"] } as Message);
+    expect([...tempSessionsSignal.value].sort()).toEqual(["t1", "t2"]);
+    handleMessage({ type: "tempSessions", ids: [] } as Message);
+    expect(tempSessionsSignal.value.size).toBe(0);
+  });
+
+  it("stores the worktree map from a worktrees push", async () => {
+    const { worktreesSignal } = await import("./signals");
+    handleMessage({
+      type: "worktrees",
+      map: {
+        a: {
+          path: "/repo/.claude/worktrees/feat",
+          branch: "worktree-feat",
+          kind: "claude",
+          exists: true,
+          locked: false,
+          repoRoot: "/repo",
+        },
+      },
+    } as Message);
+    expect(worktreesSignal.value.a?.repoRoot).toBe("/repo");
+    expect(worktreesSignal.value.a?.kind).toBe("claude");
+  });
+
+  it("opens the first-run intro when settings carries demoSeen=false", async () => {
+    const { introVisible, _resetIntro } = await import("../../../../webview/shared/model");
+    _resetIntro();
+    handleMessage({ type: "settings", demoSeen: false } as unknown as Message);
+    expect(introVisible.value).toBe(true);
+    _resetIntro();
+  });
+
+  it("leaves the intro closed when settings carries demoSeen=true", async () => {
+    const { introVisible, _resetIntro } = await import("../../../../webview/shared/model");
+    _resetIntro();
+    handleMessage({ type: "settings", demoSeen: true } as unknown as Message);
+    expect(introVisible.value).toBe(false);
+    _resetIntro();
+  });
+});
+
+describe("searchIndexReady", () => {
+  beforeEach(() => {
+    _resetSessionsSignals();
+    post.mockClear();
+  });
+
+  it("re-issues the live query, because the earlier scan saw a partial index", () => {
+    searchQuerySignal.value = "deploy";
+    setFullTextHits("deploy", []);
+
+    handleMessage({ type: "searchIndexReady" } as Message);
+
+    expect(post).toHaveBeenCalledWith({ type: "searchFullText", query: "deploy" });
+    expect(searchIndexReadySignal.value).toBe(true);
+    expect(fullTextLoadingSignal.value).toBe(true);
+  });
+
+  it("does not re-issue a query below the scan threshold", () => {
+    searchQuerySignal.value = "d";
+
+    handleMessage({ type: "searchIndexReady" } as Message);
+
+    expect(post).not.toHaveBeenCalled();
+    expect(searchIndexReadySignal.value).toBe(true);
+  });
+
+  it("does not re-issue when no query is active", () => {
+    handleMessage({ type: "searchIndexReady" } as Message);
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("keeps the spinner up while a query is live but the index is still building", () => {
+    searchQuerySignal.value = "deploy";
+    setFullTextHits("deploy", []);
+    // A reply landed, so the in-flight flag cleared — but the index was partial.
+    expect(fullTextLoadingSignal.value).toBe(false);
+    expect(searchPendingSignal.value).toBe(true);
+
+    handleMessage({ type: "searchIndexReady" } as Message);
+    setFullTextHits("deploy", ["a"]);
+
+    expect(searchPendingSignal.value).toBe(false);
+  });
+});

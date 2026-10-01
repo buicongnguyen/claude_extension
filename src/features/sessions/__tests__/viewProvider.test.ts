@@ -1,0 +1,930 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as vscode from "vscode";
+import {
+  _fireWorkspaceFoldersChange,
+  _resetListeners,
+} from "../../../__mocks__/vscode";
+
+interface MutableWorkspace {
+  workspaceFolders: Array<{ uri: { fsPath: string }; name: string; index: number }>;
+}
+
+const ws = vscode.workspace as unknown as MutableWorkspace;
+
+interface PostedMsg {
+  type: string;
+  data?: unknown;
+  defaultFilter?: unknown;
+  defaultProject?: unknown;
+  restoreWindowMinutes?: unknown;
+  query?: unknown;
+  ids?: unknown;
+}
+
+interface FakeWebview {
+  options: unknown;
+  html: string;
+  posted: PostedMsg[];
+  _msgHandler?: (msg: unknown) => void;
+  postMessage: (msg: PostedMsg) => void;
+  onDidReceiveMessage: (handler: (msg: unknown) => void) => { dispose: () => void };
+}
+
+interface FakeWebviewView {
+  webview: FakeWebview;
+  visible: boolean;
+  viewType: string;
+  onDidDispose: (cb: () => void) => { dispose: () => void };
+  onDidChangeVisibility: (cb: () => void) => { dispose: () => void };
+  _disposeCallbacks: Array<() => void>;
+  _visibilityCallbacks: Array<() => void>;
+  _dispose: () => void;
+  _fireVisibilityChange: (visible: boolean) => void;
+}
+
+function makeFakeView(): FakeWebviewView {
+  const view: FakeWebviewView = {
+    webview: {
+      options: undefined,
+      html: "",
+      posted: [],
+      postMessage(msg: PostedMsg) {
+        this.posted.push(msg);
+      },
+      onDidReceiveMessage(handler: (msg: unknown) => void) {
+        view.webview._msgHandler = handler;
+        return { dispose: () => {} };
+      },
+    },
+    visible: true,
+    viewType: "claudeCodeManager.view",
+    onDidDispose(cb: () => void) {
+      view._disposeCallbacks.push(cb);
+      return { dispose: () => {} };
+    },
+    onDidChangeVisibility(cb: () => void) {
+      view._visibilityCallbacks.push(cb);
+      return { dispose: () => {} };
+    },
+    _disposeCallbacks: [],
+    _visibilityCallbacks: [],
+    _dispose() {
+      for (const cb of view._disposeCallbacks) cb();
+    },
+    _fireVisibilityChange(visible: boolean) {
+      view.visible = visible;
+      for (const cb of view._visibilityCallbacks) cb();
+    },
+  };
+  return view;
+}
+
+// Stubs the viewProvider imports that are not covered by the existing
+// per-test vi.doMock() pattern. Because dynamic imports in vitest cache
+// by default, git/searchIndex mocks can only take effect if registered
+// once at the top level — per-test vi.doMock() misses the cached import
+// from the very first test in the file.
+let __mockedBranch = "";
+let __mockedSearchContent: (q: string) => string[] = () => [];
+vi.mock("../../../extension/git", () => ({
+  getCurrentBranch: () => __mockedBranch,
+  onBranchChange: () => ({ dispose: () => {} }),
+}));
+let __clearIndexCalls = 0;
+// Account cache-clear counters — the reload test proves Refresh forces a
+// cold model scan + usage re-aggregate. Wrapped (not replaced) via
+// importActual + top-level vi.mock so the real exports survive the
+// dynamic-import cache the per-test doMocks can't beat.
+let __clearModelCalls = 0;
+let __resetUsageCalls = 0;
+vi.mock("../../account/models", async (importActual) => {
+  const actual = await importActual<typeof import("../../account/models")>();
+  return {
+    ...actual,
+    clearModelCache: () => {
+      __clearModelCalls++;
+      actual.clearModelCache();
+    },
+  };
+});
+vi.mock("../../account/projectStats", async (importActual) => {
+  const actual = await importActual<typeof import("../../account/projectStats")>();
+  return {
+    ...actual,
+    resetUsageAggregateCache: () => {
+      __resetUsageCalls++;
+      actual.resetUsageAggregateCache();
+    },
+  };
+});
+vi.mock("../searchIndex", () => ({
+  indexSession: () => {},
+  pruneIndex: () => {},
+  clearIndex: () => {
+    __clearIndexCalls++;
+  },
+  searchContent: (q: string) => __mockedSearchContent(q),
+}));
+// Top-level so it survives the dynamic-import cache (per-test doMock of this
+// module only wins on the very first import). Returns a fresh marker each
+// call so a regeneration is observable; counts calls so the reload test can
+// prove the document was rebuilt.
+let __htmlGen = 0;
+vi.mock("../../../extension/html", () => ({
+  getWebviewHtml: () => `<html data-gen="${++__htmlGen}"></html>`,
+}));
+// Worktree enrichment spawns git off a setImmediate; stub it so the provider
+// tests don't depend on child_process or the runner's own git state.
+vi.mock("../worktreeEnrichment", () => ({ postWorktrees: vi.fn() }));
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  _resetListeners();
+  ws.workspaceFolders = [];
+  __mockedBranch = "";
+  __mockedSearchContent = () => [];
+  __clearIndexCalls = 0;
+  __clearModelCalls = 0;
+  __resetUsageCalls = 0;
+  __htmlGen = 0;
+});
+
+describe("ClaudeSessionViewProvider", () => {
+  it("posts the current workspace path to the webview when folders change", async () => {
+    // Provider pulls in many feature parsers. Stub their disk reads so import
+    // is safe in a test env that has no ~/.claude.
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+
+    // Workspace was empty at resolve time. Now folders arrive.
+    ws.workspaceFolders = [
+      { uri: { fsPath: "/home/user/proj" }, name: "proj", index: 0 },
+    ];
+    _fireWorkspaceFoldersChange();
+
+    const workspaceMsgs = view.webview.posted.filter((m) => m.type === "workspacePath");
+    expect(workspaceMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(workspaceMsgs[workspaceMsgs.length - 1].data).toBe("/home/user/proj");
+  });
+
+  it("re-posts the workspace path on ready after the webview is re-resolved", async () => {
+    // Regression: a webview recreation (window reload, panel move, context
+    // eviction) resets the webview's derived currentProject to empty, but the
+    // provider's workspace-path dedupe cache survives. If ready doesn't force a
+    // fresh post, the new webview never learns its project and the "This
+    // Project" filter silently shows every project's sessions.
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    // Workspace is already open at resolve time (the common case).
+    ws.workspaceFolders = [
+      { uri: { fsPath: "/home/user/proj" }, name: "proj", index: 0 },
+    ];
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    // First webview lifecycle: ready delivers the path.
+    const first = makeFakeView();
+    provider.resolveWebviewView(first as unknown as vscode.WebviewView);
+    await first.webview._msgHandler!({ type: "ready" });
+    expect(
+      first.webview.posted.filter((m) => m.type === "workspacePath").map((m) => m.data),
+    ).toContain("/home/user/proj");
+
+    // Webview recreated with the SAME workspace. The dedupe cache must not
+    // suppress the re-post — the new webview starts with an empty project.
+    const second = makeFakeView();
+    provider.resolveWebviewView(second as unknown as vscode.WebviewView);
+    await second.webview._msgHandler!({ type: "ready" });
+    expect(
+      second.webview.posted.filter((m) => m.type === "workspacePath").map((m) => m.data),
+    ).toContain("/home/user/proj");
+  });
+
+  it("refreshSettings posts the current settings message to the webview", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          defaultFilter: "month",
+          defaultProject: "all",
+          restoreCount: 6,
+          density: "quiet",
+          hiddenTabs: ["checkpoints"],
+          tabOrder: ["account", "config"],
+        };
+        return key in values ? values[key] : defaultValue;
+      },
+    } as unknown as ReturnType<typeof vscode.workspace.getConfiguration>);
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view.webview.posted.length = 0;
+
+    provider.refreshSettings();
+
+    const settingsMsgs = view.webview.posted.filter((m) => m.type === "settings");
+    expect(settingsMsgs).toHaveLength(1);
+    expect(settingsMsgs[0].defaultFilter).toBe("month");
+    expect(settingsMsgs[0].defaultProject).toBe("all");
+    expect(settingsMsgs[0].restoreCount).toBe(6);
+    // Shell chrome rides this message so the panel re-skins on a settings
+    // change without a reload — refreshSettings is the only push the
+    // configuration-change handler makes.
+    expect(settingsMsgs[0].density).toBe("quiet");
+    expect(settingsMsgs[0].hiddenTabs).toEqual(["checkpoints"]);
+    expect(settingsMsgs[0].tabOrder).toEqual(["account", "config"]);
+  });
+
+  it("defaults hiddenTabs and tabOrder to empty arrays when unset", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: (_key: string, defaultValue?: unknown) => defaultValue,
+    } as unknown as ReturnType<typeof vscode.workspace.getConfiguration>);
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view.webview.posted.length = 0;
+
+    provider.refreshSettings();
+
+    const settingsMsgs = view.webview.posted.filter((m) => m.type === "settings");
+    // Empty is what makes a fresh install behave exactly as it did before
+    // these settings existed — every tab, in the registry's own order.
+    expect(settingsMsgs[0].hiddenTabs).toEqual([]);
+    expect(settingsMsgs[0].tabOrder).toEqual([]);
+  });
+
+  it("defaults density to comfortable when the setting is unset", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: (_key: string, defaultValue?: unknown) => defaultValue,
+    } as unknown as ReturnType<typeof vscode.workspace.getConfiguration>);
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view.webview.posted.length = 0;
+
+    provider.refreshSettings();
+
+    const settingsMsgs = view.webview.posted.filter((m) => m.type === "settings");
+    expect(settingsMsgs).toHaveLength(1);
+    expect(settingsMsgs[0].density).toBe("comfortable");
+  });
+
+  it("posts the current branch alongside workspace path on folder change", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+    __mockedBranch = "feature/test";
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+
+    ws.workspaceFolders = [
+      { uri: { fsPath: "/home/user/proj" }, name: "proj", index: 0 },
+    ];
+    _fireWorkspaceFoldersChange();
+
+    const branchMsgs = view.webview.posted.filter((m) => m.type === "workspaceBranch");
+    expect(branchMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(branchMsgs[branchMsgs.length - 1].data).toBe("feature/test");
+  });
+
+  it("replies to searchFullText with a fullTextResults message echoing the query", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+    __mockedSearchContent = (q: string) => (q === "needle" ? ["sess-1", "sess-2"] : []);
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+
+    const handler = view.webview._msgHandler;
+    expect(handler).toBeDefined();
+    await handler!({ type: "searchFullText", query: "needle" });
+
+    const reply = view.webview.posted.find((m) => m.type === "fullTextResults");
+    expect(reply).toBeDefined();
+    expect(reply!.query).toBe("needle");
+    expect(reply!.ids).toEqual(["sess-1", "sess-2"]);
+
+    // Query that the stub does not know about returns empty ids.
+    await handler!({ type: "searchFullText", query: "nothing-there" });
+    const empty = view.webview.posted.filter((m) => m.type === "fullTextResults").pop();
+    expect(empty!.query).toBe("nothing-there");
+    expect(empty!.ids).toEqual([]);
+  });
+
+  // Bumped per-test timeout: this test does `vi.doMock(...)` for eight
+  // modules then `await import("../viewProvider")` — the dynamic import
+  // pulls a fresh dep graph through Vite's transformer on the first
+  // run, which crosses the default 5s timeout on cold CI/dev workers.
+  // The reloadAll work itself is sub-second; the slack covers cold
+  // import cost only. (30s not 15s: the transformed graph has grown, so
+  // a fully-cold worker under full-suite parallelism needs the headroom.)
+  it("reloadAll re-posts data for every feature plus a reloadComplete marker", { timeout: 30000 }, async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+    vi.doMock("../../skills/parser", () => ({ parseSkills: () => [{ id: "sk1" }] }));
+    vi.doMock("../../commands/parser", () => ({ parseCommands: () => [{ name: "cmd1" }] }));
+    vi.doMock("../../hooks/parser", () => ({
+      parseHooks: () => ({ hooks: [{ name: "hook1" }], errors: [] }),
+    }));
+    vi.doMock("../../mcp/parser", () => ({
+      parseMcpServers: () => ({ servers: [{ name: "srv1" }], errors: [] }),
+      readMcpAuthNeeds: () => [],
+      setProjectMcpServerDisabled: () => true,
+      deleteMcpServer: () => true,
+      globalMcpFileFor: () => "/home/.claude.json",
+      globalMcpConfigFile: () => "/home/.claude.json",
+    }));
+    vi.doMock("../../agents/parser", () => ({
+      parseAgents: () => ({ agents: [{ name: "agent1" }], errors: [] }),
+    }));
+    vi.doMock("../../account/parser", () => ({
+      parseAccountData: () => ({ profile: { userID: "u-1" } }),
+      writeSettingsValue: () => true,
+      addPermissionEntry: () => true,
+      removePermissionEntry: () => true,
+      resolveSettingsPath: () => "",
+      restoreClaudeJsonFromBackup: () => true,
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    const htmlAtResolve = view.webview.html;
+    view.webview.posted.length = 0;
+
+    await provider.reloadAll();
+
+    const types = view.webview.posted.map((m) => m.type);
+    expect(types).toContain("sessions");
+    expect(types).toContain("accountData");
+    expect(types).toContain("skills");
+    expect(types).toContain("commands");
+    expect(types).toContain("hooks");
+    expect(types).toContain("mcpServers");
+    expect(types).toContain("agents");
+    // Quota rides its own message — Refresh must re-push it, since the
+    // webview won't refetch quota for an unchanged identity on its own.
+    expect(types).toContain("quotaData");
+    // reloadComplete must be the final wire event so the webview can
+    // safely drop the spinner once it arrives.
+    expect(types[types.length - 1]).toBe("reloadComplete");
+
+    // (a) DATA — the global reload clears the full-text search index and
+    // the account caches (model scan + usage aggregate) so Refresh returns
+    // a freshly-discovered model list and live token usage, not stale memos.
+    expect(__clearIndexCalls).toBeGreaterThanOrEqual(1);
+    expect(__clearModelCalls).toBeGreaterThanOrEqual(1);
+    expect(__resetUsageCalls).toBeGreaterThanOrEqual(1);
+    // (c) WEBVIEW — the document was regenerated from the html builder, so
+    // the post-reload html differs from the one set at resolve time.
+    expect(view.webview.html).not.toBe(htmlAtResolve);
+    expect(view.webview.html).toContain("data-gen");
+  });
+
+  // Same cold dynamic-import slack as the sibling reload test above: the
+  // doMock + `await import("../viewProvider")` pulls a fresh dep graph
+  // (now including the importActual-wrapped account caches) through Vite's
+  // transformer, which crosses the default 5s timeout on cold workers.
+  it("reloadAll routes through the reloadAll webview message", { timeout: 30000 }, async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+    vi.doMock("../../skills/parser", () => ({ parseSkills: () => [] }));
+    vi.doMock("../../commands/parser", () => ({ parseCommands: () => [] }));
+    vi.doMock("../../hooks/parser", () => ({ parseHooks: () => ({ hooks: [], errors: [] }) }));
+    vi.doMock("../../mcp/parser", () => ({
+      parseMcpServers: () => ({ servers: [], errors: [] }),
+      readMcpAuthNeeds: () => [],
+      setProjectMcpServerDisabled: () => true,
+      deleteMcpServer: () => true,
+      globalMcpFileFor: () => "/home/.claude.json",
+      globalMcpConfigFile: () => "/home/.claude.json",
+    }));
+    vi.doMock("../../agents/parser", () => ({ parseAgents: () => ({ agents: [], errors: [] }) }));
+    vi.doMock("../../account/parser", () => ({
+      parseAccountData: () => ({ profile: { userID: "" } }),
+      writeSettingsValue: () => true,
+      addPermissionEntry: () => true,
+      removePermissionEntry: () => true,
+      resolveSettingsPath: () => "",
+      restoreClaudeJsonFromBackup: () => true,
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view.webview.posted.length = 0;
+
+    const handler = view.webview._msgHandler;
+    expect(handler).toBeDefined();
+    await handler!({ type: "reloadAll" });
+
+    expect(view.webview.posted.some((m) => m.type === "reloadComplete")).toBe(true);
+  });
+
+  it("registers a FileSystemWatcher targeting the sessions PID directory", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    interface CapturedPattern {
+      basePath: string;
+      glob: string;
+    }
+    const watcherPatterns: CapturedPattern[] = [];
+    vi.spyOn(vscode.workspace, "createFileSystemWatcher").mockImplementation(
+      (pattern: unknown) => {
+        const pat = pattern as { base?: { fsPath?: string }; pattern?: string };
+        const basePath =
+          (pat?.base && typeof pat.base.fsPath === "string" ? pat.base.fsPath : "") ?? "";
+        const glob = typeof pat?.pattern === "string" ? pat.pattern : "";
+        watcherPatterns.push({ basePath, glob });
+        return {
+          onDidChange: () => ({ dispose: () => {} }),
+          onDidCreate: () => ({ dispose: () => {} }),
+          onDidDelete: () => ({ dispose: () => {} }),
+          dispose: () => {},
+          ignoreCreateEvents: false,
+          ignoreChangeEvents: false,
+          ignoreDeleteEvents: false,
+        } as unknown as vscode.FileSystemWatcher;
+      },
+    );
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+
+    // The PID-file watcher is the fix for the multi-window dot bug — its
+    // absence is what allowed sibling sessions' live state to go stale
+    // when only one session's transcript wrote JSONL. The pattern is
+    // `*.json` rooted at `<claudeDir>/sessions` rather than
+    // `sessions/*.json` rooted at `claudeDir`, so we check both the base
+    // and glob, not just a single string.
+    const pidWatcher = watcherPatterns.find(
+      (p) => /[\\/]sessions$/.test(p.basePath) && p.glob === "*.json",
+    );
+    expect(pidWatcher).toBeDefined();
+
+    view._dispose();
+  });
+
+  it("subscribes to webview visibility changes so the dot can re-sync after the panel re-opens", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+
+    // The visibility hook is what powers the death-detection poller —
+    // it pauses CPU spend when the panel is hidden and re-fires a live
+    // refresh the moment the user re-opens the panel. Without this
+    // subscription, sessions that exited while hidden would keep
+    // showing the dot until the next FS event lands.
+    expect(view._visibilityCallbacks.length).toBeGreaterThan(0);
+
+    // Firing the hidden → visible transition must not throw, even
+    // though the dynamic-import boundary means we can't observe the
+    // downstream parser stub being hit directly.
+    expect(() => {
+      view._fireVisibilityChange(false);
+      view._fireVisibilityChange(true);
+    }).not.toThrow();
+
+    view._dispose();
+  });
+
+  it("routes getMcpServers + getCommands through the per-feature handlers", async () => {
+    // F3 host-wiring regression guard: the commands and mcp features moved
+    // their dispatch into their own messageHandlers.ts modules. This test
+    // drives the provider's live onDidReceiveMessage handler with the two
+    // feature message types and asserts the per-feature handlers reply —
+    // proving the new chain is actually wired (not just the dead monolith).
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+    vi.doMock("../../commands/parser", () => ({
+      parseCommands: () => [{ name: "review", scope: "global", path: "/x/review.md" }],
+      getBuiltInCommands: () => [],
+    }));
+    vi.doMock("../../mcp/parser", () => ({
+      parseMcpServers: () => ({ servers: [{ name: "srv1", scope: "global" }], errors: [] }),
+      readMcpAuthNeeds: () => [],
+      setProjectMcpServerDisabled: () => true,
+      deleteMcpServer: () => true,
+      globalMcpFileFor: () => "/home/.claude.json",
+      globalMcpConfigFile: () => "/home/.claude.json",
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view.webview.posted.length = 0;
+
+    const handler = view.webview._msgHandler;
+    expect(handler).toBeDefined();
+
+    await handler!({ type: "getCommands" });
+    const cmdReply = view.webview.posted.find((m) => m.type === "commands");
+    expect(cmdReply).toBeDefined();
+    expect(Array.isArray(cmdReply!.data)).toBe(true);
+
+    await handler!({ type: "getMcpServers" });
+    const mcpReply = view.webview.posted.find((m) => m.type === "mcpServers");
+    expect(mcpReply).toBeDefined();
+    // Data shape is now { servers, authNeeds } (piggybacks auth-health
+    // badge onto the existing message — see mcp/messageHandlers.ts).
+    const data = mcpReply!.data as { servers?: unknown; authNeeds?: unknown };
+    expect(Array.isArray(data.servers)).toBe(true);
+    expect(Array.isArray(data.authNeeds)).toBe(true);
+  });
+
+  it("postWorkspacePath silently ignores posts after the view is disposed", async () => {
+    vi.doMock("../parser", () => ({
+      parseSessions: () => [],
+      parseSessionDetail: () => null,
+      groupSessions: () => [],
+      getStats: () => ({ totalSessions: 0, totalProjects: 0, thisWeek: 0, totalMessages: 0 }),
+      getUniqueProjects: () => [],
+      searchSessions: () => [],
+      filterSessions: () => [],
+      getLastParseWarning: () => null,
+      readLiveSessions: () => new Map(),
+      applyLiveState: () => false,
+      clearMetaCaches: () => {},
+      clearOrphanCache: () => {},
+      clearPendingCache: () => {},
+    }));
+    vi.doMock("../state", () => ({
+      loadState: () => ({ pinned: [], deleted: [], renames: {} }),
+      // Called once when the first panel resolves; a no-op here so the
+      // provider tests never touch the real state file.
+      pinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      unpinSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      deleteSession: () => ({ pinned: [], deleted: [], renames: {} }),
+      renameSession: () => ({ pinned: [], deleted: [], renames: {} }),
+    }));
+
+    const { ClaudeSessionViewProvider } = await import("../viewProvider");
+    const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+
+    const view = makeFakeView();
+    provider.resolveWebviewView(view as unknown as vscode.WebviewView);
+    view._dispose();
+
+    // After dispose, refreshSettings and the workspace-folder change handler
+    // should both no-op rather than throw or push to a stale view.
+    const before = view.webview.posted.length;
+    provider.refreshSettings();
+    ws.workspaceFolders = [
+      { uri: { fsPath: "/some/where" }, name: "where", index: 0 },
+    ];
+    _fireWorkspaceFoldersChange();
+    expect(view.webview.posted.length).toBe(before);
+  });
+
+  describe("two panels at once", () => {
+    /** Resolve `count` panels on one provider and hand them back. */
+    async function withPanels(count: number) {
+      const { ClaudeSessionViewProvider } = await import("../viewProvider");
+      const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+      const views = Array.from({ length: count }, (_, i) => {
+        const v = makeFakeView();
+        v.viewType = i === 0 ? "claudeCodeManager.view" : "claudeCodeManager.secondaryView";
+        provider.resolveWebviewView(v as unknown as vscode.WebviewView);
+        return v;
+      });
+      return { provider, views };
+    }
+
+    it("delivers a host push to every open panel", async () => {
+      // The bug this replaced: a single `view` slot meant the second
+      // panel to resolve silently hijacked the first, which then went
+      // dead while still on screen.
+      const { provider, views } = await withPanels(2);
+      for (const v of views) v.webview.posted.length = 0;
+
+      provider.getWebview()?.postMessage({ type: "probe" });
+
+      for (const v of views) {
+        expect(v.webview.posted.map((m) => m.type)).toContain("probe");
+      }
+    });
+
+    it("hands back the same sink across calls so payload dedupe still works", async () => {
+      // accountPush keys a WeakMap on this object; a fresh handle per
+      // call would silently disable that dedupe.
+      const { provider } = await withPanels(2);
+      expect(provider.getWebview()).toBe(provider.getWebview());
+    });
+
+    it("issues a fresh sink once the panel set changes", async () => {
+      const { provider, views } = await withPanels(2);
+      const before = provider.getWebview();
+      views[1]._dispose();
+      expect(provider.getWebview()).not.toBe(before);
+    });
+
+    it("keeps the surviving panel live when the other closes", async () => {
+      const { provider, views } = await withPanels(2);
+      views[1]._dispose();
+      views[0].webview.posted.length = 0;
+
+      expect(provider.isDisposed()).toBe(false);
+      provider.getWebview()?.postMessage({ type: "probe" });
+      expect(views[0].webview.posted.map((m) => m.type)).toContain("probe");
+    });
+
+    it("stops posting to a panel that has closed", async () => {
+      const { provider, views } = await withPanels(2);
+      views[1]._dispose();
+      const closedCount = views[1].webview.posted.length;
+
+      provider.getWebview()?.postMessage({ type: "probe" });
+      expect(views[1].webview.posted.length).toBe(closedCount);
+    });
+
+    it("counts as disposed only once the last panel closes", async () => {
+      const { provider, views } = await withPanels(2);
+      views[0]._dispose();
+      expect(provider.isDisposed()).toBe(false);
+      views[1]._dispose();
+      expect(provider.isDisposed()).toBe(true);
+      expect(provider.getWebview()).toBeUndefined();
+    });
+
+    it("focuses a visible panel, preferring it over a hidden one", async () => {
+      const { provider, views } = await withPanels(2);
+      views[0]._fireVisibilityChange(false);
+      expect(provider.preferredFocusViewId("fallback")).toBe(
+        "claudeCodeManager.secondaryView",
+      );
+    });
+
+    it("falls back when no panel has been opened", async () => {
+      const { ClaudeSessionViewProvider } = await import("../viewProvider");
+      const provider = new ClaudeSessionViewProvider({ fsPath: "/ext" } as vscode.Uri);
+      expect(provider.preferredFocusViewId("fallback")).toBe("fallback");
+    });
+
+    it("gives the second panel its own document", async () => {
+      const { views } = await withPanels(2);
+      for (const v of views) {
+        expect(v.webview.html).toContain("<html");
+      }
+    });
+  });
+});

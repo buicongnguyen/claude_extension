@@ -1,0 +1,748 @@
+// Modified for the personal fork, September 2026. See NOTICE.
+/**
+ * Webview → host message dispatch for the sessions view provider.
+ *
+ * The provider forwards every `WebviewMessage` to `dispatch(msg, ctx)`,
+ * which wraps a single try/catch and chains feature-scoped handlers:
+ * sessions (this file) → features (skills/commands/hooks/mcp/agents) →
+ * account → settings. Each handler returns `true` when it owns the
+ * message type and `false` to fall through to the next.
+ *
+ * `HostContext` and the shared account helpers live in `hostContext.ts`
+ * and are re-exported here so existing imports (`./messageHandlers`)
+ * keep working.
+ */
+import { recordError as recordHostError } from "../diagnostics/errorLog";
+import * as vscode from "vscode";
+import {
+  parseSessions,
+  parseSessionDetail,
+  groupSessions,
+  getStats,
+  getUniqueProjects,
+  searchSessions,
+  filterSessions,
+  getLastParseWarning,
+} from "./parser";
+import { searchContent } from "./searchIndex";
+import { getSessionFile } from "./metaParser";
+import {
+  loadState,
+  pinSession,
+  unpinSession,
+  deleteSession,
+  renameSession,
+  pinSessions as bulkPinState,
+  unpinSessions as bulkUnpinState,
+  deleteSessions as bulkDeleteState,
+  archiveSession,
+  unarchiveSession,
+  archiveSessions,
+} from "./state";
+import {
+  openProject,
+  newSession,
+  newTempSession,
+  continueLastSession,
+  copyResumeCommand,
+  copyMarkdown,
+  confirmDeleteSession,
+  promptRenameSession,
+  resumeSession,
+  resumeAfterAccountSwitch,
+  continueStoppedTask,
+  createWorktreeForSession,
+  exportSessionFile,
+  bulkExportSessionFiles,
+  importSessionFile,
+  importMultipleSessionFiles,
+  resolveClaudeTarget,
+} from "./commands";
+import { postWorktrees } from "./worktreeEnrichment";
+import {
+  isClaudeCodeExtensionInstalled,
+  openPromptInExtension,
+  openSessionInExtension,
+  isExtensionEntrypoint,
+} from "../../extension/claudeCodeExtension";
+import { launchClaudeWithInput, createTerminal, runInTerminal } from "../../extension/terminal";
+import { getTempSessionIds, promoteTempSession } from "../../extension/ephemeralSession";
+import { handlePromptsMessage, type PromptsHostContext } from "../prompts";
+import { handleMemoryMessage, type MemoryHostContext } from "../memory";
+import { handlePluginsMessage, type PluginsHostContext } from "../plugins";
+import { writeSettingsValue } from "../account/parser";
+import { handleFeatureMessage } from "./featureHandlers";
+import { handleAccountMessage } from "./accountHandlers";
+import { handleSettingsMessage } from "./settingsHandlers";
+import { handleMcpMessage, type McpHostContext } from "../mcp/messageHandlers";
+import {
+  handleCheckpointsMessage,
+  type CheckpointsHostContext,
+} from "../checkpoints/messageHandlers";
+import { handleAgentMessage, type AgentHostContext } from "../agents/messageHandlers";
+import { dispatchCommandsMessage, type CommandsHost } from "../commands/messageHandlers";
+import { getWorkspace } from "../../extension/workspace";
+import { type HostContext, DEMO_SEEN_KEY } from "./hostContext";
+import { parseMessage } from "../../shared/protocol/schemas";
+import type { WebviewMessage } from "./types";
+
+async function viewRunningSession(sessionId: string, ctx: HostContext): Promise<void> {
+  if (ctx.terminals.view(sessionId)) return;
+  const session = ctx.getSessions().find((s) => s.id === sessionId);
+  if (isExtensionEntrypoint(session?.entrypoint) && isClaudeCodeExtensionInstalled()) {
+    if (await openSessionInExtension(sessionId)) return;
+    vscode.window.showErrorMessage("Claude's chat could not accept View. Open the Claude Code panel directly.");
+    return;
+  }
+  vscode.window.showInformationMessage(
+    "This session is running, but its terminal isn't tracked by the extension — it may be in another window or was started outside VS Code.",
+  );
+}
+
+export {
+  DEMO_SEEN_KEY,
+  buildSwitchConfirmDetail,
+  identityKey,
+  type HostContext,
+} from "./hostContext";
+
+/**
+ * Dispatch a single webview message. Wraps the handler chain in a
+ * try/catch so a handler throwing surfaces as a webview `error` message
+ * rather than crashing the extension host. No-op when the view is
+ * already disposed.
+ */
+export async function dispatch(msg: WebviewMessage, ctx: HostContext): Promise<void> {
+  const wv = ctx.getWebview();
+  if (!wv) return;
+
+  // Validate every inbound webview message against the shared valibot
+  // schema before dispatching. A malformed message (shape drift, a
+  // compromised webview, a protocol mismatch across an upgrade) is logged
+  // and dropped rather than fed into the handler chain. parseMessage
+  // narrows `unknown` to a `Message`; the handlers below already expect a
+  // well-formed `WebviewMessage`, so we keep the original reference once
+  // validation succeeds.
+  try {
+    parseMessage(msg);
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[claude-manager] Rejected malformed webview message (${String((msg as { type?: unknown }).type)}):`,
+      detail,
+    );
+    // Still ack. The webview armed its busy indicator when it posted;
+    // dropping the message without a reply leaves that indicator lit
+    // until the client-side stuck timeout fires. A rejected message is
+    // a finished message as far as the request/ack pairing goes.
+    wv.postMessage({ type: "ack" });
+    return;
+  }
+
+  const startedAt = Date.now();
+  try {
+    // Ordered fall-through: the first handler that owns the message type
+    // returns true and short-circuits the chain.
+    //
+    // Sessions runs first because it owns the richer, resumeIn-aware
+    // variants of the shared `openUrl` / `launchChatWithPrompt` types —
+    // the commands handler also claims those, so the ordering keeps the
+    // session behaviour authoritative for them.
+    if (await handleSessionMessage(msg, ctx)) return;
+    // Commands + MCP route through their own per-feature handlers. The narrow
+    // host adapters below let those pure handlers reach the vscode surface
+    // without importing the provider.
+    if (await dispatchCommandsMessage(msg, makeCommandsHost(ctx))) return;
+    if (await handleMcpMessage(msg, makeMcpHost(ctx))) return;
+    if (await handleCheckpointsMessage(msg, makeCheckpointsHost(ctx))) return;
+    if (await handlePromptsMessage(msg, makePromptsHost(ctx))) return;
+    if (await handleMemoryMessage(msg, makeMemoryHost(ctx))) return;
+    if (await handlePluginsMessage(msg, makePluginsHost(ctx))) return;
+    if (await handleAgentMessage(msg, makeAgentHost(ctx))) return;
+    if (await handleFeatureMessage(msg, ctx)) return;
+    if (await handleAccountMessage(msg, ctx)) return;
+    await handleSettingsMessage(msg, ctx);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[claude-manager] Message handler error (${msg.type}):`, message);
+    // The webview shows this one; the log keeps it. Without this the host half
+    // of a failure was missing from every bug report.
+    recordHostError({
+      at: Date.now(),
+      source: `host:${msg.type}`,
+      message,
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    wv.postMessage({ type: "error", message: `Internal error: ${message}` });
+  } finally {
+    // Perf tripwire: name any handler that held the dispatch for longer
+    // than a UI-noticeable beat. Shows up in Output → Extension Host, so
+    // "clicking X feels slow" reports come with the culprit attached.
+    // Excludes handlers that legitimately await user input (dialogs) —
+    // those idle in a dialog, not in work — identified by their prompt-*
+    // naming convention.
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs > SLOW_HANDLER_MS && !msg.type.startsWith("prompt")) {
+      console.warn(
+        `[claude-manager] slow handler: ${msg.type} took ${elapsedMs}ms`,
+      );
+    }
+    // Every webview-originated message gets exactly one ack when its
+    // handler finishes (success or error). The webview arms a busy
+    // indicator on send and clears it on ack — the user sees progress
+    // instead of a dead panel while a slow handler runs.
+    ctx.getWebview()?.postMessage({ type: "ack" });
+  }
+}
+
+/** Dispatch time above which a handler is logged as slow. */
+const SLOW_HANDLER_MS = 250;
+
+/**
+ * Adapt the shared {@link HostContext} to the narrow {@link CommandsHost}
+ * the commands feature's handler depends on. The handler is pure (no vscode
+ * import); this adapter is the single place that bridges it to the editor.
+ *
+ * `openUrl` / `launchChatWithPrompt` are also claimed by the commands
+ * handler, but the session handler runs first in the chain and owns the
+ * richer variants — so at runtime those never reach here. The bindings are
+ * still wired faithfully (not stubbed) so the handler is correct in
+ * isolation and unit-testable.
+ */
+function makeCommandsHost(ctx: HostContext): CommandsHost {
+  return {
+    post: (m) => {
+      ctx.getWebview()?.postMessage(m);
+    },
+    openFile: async (filePath) => {
+      try {
+        const doc = await vscode.workspace.openTextDocument(filePath);
+        await vscode.window.showTextDocument(doc);
+      } catch {
+        vscode.window.showErrorMessage(`Could not open ${filePath}`);
+      }
+    },
+    openUrl: (url) => {
+      void vscode.env.openExternal(vscode.Uri.parse(url));
+    },
+    launchChat: async (prompt) => {
+      const term = createTerminal("ask");
+      void launchClaudeWithInput(term, prompt);
+    },
+    workspacePath: getWorkspace() || undefined,
+  };
+}
+
+/**
+ * Adapt the shared {@link HostContext} to the MCP feature's
+ * {@link McpHostContext}. Re-derives the workspace per call so a folder
+ * opened after the webview resolved is reflected.
+ */
+function makeMcpHost(ctx: HostContext): McpHostContext {
+  return {
+    getWebview: () => ctx.getWebview(),
+    getWorkspace: () => getWorkspace() || undefined,
+    setMcpServers: (servers) => ctx.setMcpServers(servers),
+    runShellCommand: (label, command) => {
+      const term = createTerminal(label);
+      term.show();
+      runInTerminal(term, command);
+    },
+    runSlashCommand: (label, slash) => {
+      // Open Claude and offer explicit copy; never type on a timer.
+      const term = createTerminal(label);
+      void launchClaudeWithInput(term, slash);
+    },
+  };
+}
+
+/**
+ * Adapt the shared {@link HostContext} to the checkpoints feature's
+ * {@link CheckpointsHostContext}.
+ *
+ * Checkpoint blobs are keyed by session id only, so the feature needs two
+ * things the sessions panel already has: a display label for an id, and the
+ * transcript that holds the path↔blob mapping. Both are read from the cached
+ * session list / file index, so neither costs a disk walk.
+ */
+/**
+ * Prompt History needs exactly two things from the host: the webview to
+ * reply on, and the ability to open the session a prompt came from. The
+ * resume path stays owned by this feature — prompts depends on the
+ * capability, not on the sessions module.
+ */
+function makePromptsHost(ctx: HostContext): PromptsHostContext {
+  return {
+    getWebview: () => ctx.getWebview(),
+    resumeSession: (sessionId) => resumeSession(sessionId, false, ctx.getSessions()),
+  };
+}
+
+/** Memory reads and writes only its own files; the webview is its whole
+ *  host surface. */
+function makeMemoryHost(ctx: HostContext): MemoryHostContext {
+  return { getWebview: () => ctx.getWebview() };
+}
+
+/**
+ * Plugins toggles `enabledPlugins` in settings.json, so it takes the
+ * settings writer as an injected capability rather than importing the
+ * account feature. The writer already refuses an unparseable file,
+ * snapshots before writing, and renames atomically; passing it here is
+ * what turns the tab from read-only into one that can flip a plugin.
+ */
+function makePluginsHost(ctx: HostContext): PluginsHostContext {
+  return {
+    getWebview: () => ctx.getWebview(),
+    getWorkspace: () => getWorkspace(),
+    // The writer's scope type is `ClaudeSettingsScope`, which excludes
+    // "managed" — the admin policy file is never ours to write, and the
+    // feature's own `writableScope()` already resolves it to null.
+    writeSettingsValue,
+  };
+}
+
+function makeCheckpointsHost(ctx: HostContext): CheckpointsHostContext {
+  return {
+    getWebview: () => ctx.getWebview(),
+    describeSession: (sessionId) => {
+      const session = ctx.getSessions().find((s) => s.id === sessionId);
+      if (!session) return undefined;
+      return {
+        // Fall back through the same ladder the session rows use: an
+        // explicit name, then the first-prompt summary, then the short id.
+        label: session.name || session.summary || sessionId.slice(0, 8),
+        project: session.project,
+      };
+    },
+    transcriptPath: (sessionId) => getSessionFile(sessionId),
+  };
+}
+
+/** Adapt the shared {@link HostContext} to the agents feature's {@link AgentHostContext}. */
+function makeAgentHost(ctx: HostContext): AgentHostContext {
+  return {
+    getWebview: () => ctx.getWebview(),
+    getWorkspace: () => getWorkspace() || undefined,
+    setAgents: (agents) => ctx.setAgents(agents),
+  };
+}
+
+/**
+ * Reparse the corpus and re-push the session list (list + projects + temp-id
+ * set + search index). Shared by the flows that mutate transcripts/history
+ * outside the file-watcher's reliable reach — import and temp-session cleanup
+ * / promotion — so the row set never depends on a watcher event landing.
+ */
+function reparseAndPushSessions(ctx: HostContext): void {
+  ctx.setSessions(parseSessions(loadState().renames));
+  const wv = ctx.getWebview();
+  if (!wv) return;
+  ctx.postWorkspacePath();
+  wv.postMessage({
+    type: "sessions",
+    data: groupSessions(ctx.getSessions()),
+    stats: getStats(ctx.getSessions()),
+  });
+  postWorktrees(wv, ctx.getSessions());
+  wv.postMessage({ type: "projects", data: getUniqueProjects(ctx.getSessions()) });
+  wv.postMessage({ type: "tempSessions", ids: getTempSessionIds() });
+  ctx.buildSearchIndex();
+}
+
+/**
+ * Handle the core session-list / detail / lifecycle messages plus the
+ * generic file-open. Returns true when the message was handled.
+ */
+async function handleSessionMessage(
+  msg: WebviewMessage,
+  ctx: HostContext,
+): Promise<boolean> {
+  const wv = ctx.getWebview();
+  if (!wv) return true;
+
+  switch (msg.type) {
+    case "markDemoSeen": {
+      await ctx.globalState?.update(DEMO_SEEN_KEY, true);
+      break;
+    }
+
+    case "ready": {
+      ctx.setSessions(parseSessions(loadState().renames));
+      ctx.postWorkspacePath();
+      ctx.refreshSettings();
+      wv.postMessage({ type: "sessions", data: groupSessions(ctx.getSessions()), stats: getStats(ctx.getSessions()) });
+      postWorktrees(wv, ctx.getSessions());
+      wv.postMessage({ type: "projects", data: getUniqueProjects(ctx.getSessions()) });
+      wv.postMessage({ type: "userState", ...loadState() });
+      wv.postMessage({ type: "terminalSessions", ids: ctx.terminals.ids() });
+      wv.postMessage({ type: "tempSessions", ids: getTempSessionIds() });
+      const warning = getLastParseWarning();
+      if (warning) wv.postMessage({ type: "error", message: warning });
+      // Kick off the full-text index in the background — the webview
+      // has its data already, this runs behind the user's first view.
+      ctx.buildSearchIndex();
+      break;
+    }
+
+    case "getSessionDetail": {
+      const mode = (msg as { mode?: "first" | "last" }).mode ?? "last";
+      const query = (msg as { query?: string }).query ?? "";
+      const detail = parseSessionDetail(
+        msg.sessionId,
+        ctx.getSessions().find((s) => s.id === msg.sessionId),
+        mode,
+        query,
+      );
+      if (detail) {
+        wv.postMessage({ type: "sessionDetail", data: detail });
+      }
+      break;
+    }
+
+    case "search": {
+      const sessions = ctx.getSessions();
+      const filtered = msg.query ? searchSessions(sessions, msg.query) : sessions;
+      wv.postMessage({ type: "sessions", data: groupSessions(filtered), stats: getStats(filtered) });
+      postWorktrees(wv, filtered);
+      break;
+    }
+
+    case "filter": {
+      const filtered = filterSessions(ctx.getSessions(), {
+        project: msg.project,
+        branch: msg.branch,
+        dateRange: msg.dateRange,
+      });
+      wv.postMessage({ type: "sessions", data: groupSessions(filtered), stats: getStats(filtered) });
+      postWorktrees(wv, filtered);
+      break;
+    }
+
+    case "refresh":
+      ctx.setSessions(parseSessions(loadState().renames));
+      wv.postMessage({ type: "sessions", data: groupSessions(ctx.getSessions()), stats: getStats(ctx.getSessions()) });
+      postWorktrees(wv, ctx.getSessions());
+      ctx.buildSearchIndex();
+      break;
+
+    case "reloadAll":
+      await ctx.reloadAll();
+      break;
+
+    case "searchFullText": {
+      // Transcript content search scans the pre-built lowercased index, yielding
+      // periodically so a large index doesn't block the host. The reply carries
+      // the echo-query so the webview can drop stale results if the user has
+      // since typed more.
+      const ids = await searchContent(msg.query);
+      // The webview may have been torn down while we yielded.
+      ctx.getWebview()?.postMessage({ type: "fullTextResults", query: msg.query, ids });
+      break;
+    }
+
+    case "launchChatWithPrompt": {
+      // Route via the shared resumeIn setting so Ask Again / Launch
+      // in Chat respect the user's chosen surface. Extension → URI
+      // handler. Terminal → open Claude and offer explicit input copy.
+      // Cap prompt length once up-front regardless of target: URIs
+      // cap at ~2 MB in Chromium but shells (cmd/PowerShell) reject
+      // far smaller; terminal sendText fine with 4 KB.
+      const PROMPT_MAX = 4000;
+      const prompt =
+        msg.prompt.length > PROMPT_MAX
+          ? msg.prompt.slice(0, PROMPT_MAX) + "\n\n…(truncated)"
+          : msg.prompt;
+      if (msg.prompt.length > PROMPT_MAX) {
+        vscode.window.showInformationMessage(
+          `Prompt was truncated to ${PROMPT_MAX} characters before launching Claude.`,
+        );
+      }
+      const target = await resolveClaudeTarget(undefined);
+      if (target === "cancel") break;
+      if (target === "extension") {
+        await openPromptInExtension(prompt);
+      } else {
+        // Personal fork: the user pastes only after the Claude prompt is ready.
+        const term = createTerminal("ask");
+        void launchClaudeWithInput(term, prompt);
+      }
+      break;
+    }
+
+    case "openProjectAndChat": {
+      // The URI handler is workspace-scoped, so we have to open the
+      // target project first and then fire the URI. VS Code opens
+      // the new window asynchronously — the delay lets the Claude
+      // Code extension finish activating in the new window before
+      // the URI is dispatched. 3000ms is empirical: short enough to
+      // not feel laggy, long enough for cold-start activation on
+      // slower machines. Without it the URI races activation and
+      // the chat tab opens without the prompt attaching.
+      openProject(msg.projectPath);
+      if (isClaudeCodeExtensionInstalled()) {
+        setTimeout(() => openPromptInExtension("", { newWindow: true }), 3000);
+      }
+      break;
+    }
+
+    case "openProject":
+      openProject(msg.projectPath);
+      break;
+
+    case "newSession":
+      await newSession();
+      break;
+
+    case "newTempSession":
+      await newTempSession(() => reparseAndPushSessions(ctx));
+      break;
+
+    case "promoteTempSession": {
+      // Keep this temp session as a regular one, then re-push so its "Temp"
+      // badge + "Make permanent" action drop immediately.
+      if (promoteTempSession(msg.sessionId)) {
+        wv.postMessage({ type: "tempSessions", ids: getTempSessionIds() });
+      }
+      break;
+    }
+
+    case "continueLastSession":
+      await continueLastSession(ctx.getSessions());
+      break;
+
+    case "forkSession":
+      await resumeSession(msg.sessionId, true, ctx.getSessions());
+      break;
+
+    case "pinSession": {
+      const state = pinSession(msg.sessionId);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "unpinSession": {
+      const state = unpinSession(msg.sessionId);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "archiveSession": {
+      const state = archiveSession(msg.sessionId);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "unarchiveSession": {
+      const state = unarchiveSession(msg.sessionId);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "archiveSessions": {
+      const state = archiveSessions(msg.sessionIds);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "deleteSession": {
+      const state = deleteSession(msg.sessionId);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "confirmDelete": {
+      const result = await confirmDeleteSession(msg.sessionId, msg.callback);
+      if (result) {
+        // Post the whole freshly-loaded state rather than rebuilding it
+        // from `result`: every other userState producer spreads loadState(),
+        // and a hand-built subset silently drops any field added later.
+        wv.postMessage({ type: "userState", ...loadState() });
+        if (result.navigateToList) {
+          wv.postMessage({ type: "navigateList" });
+        }
+      }
+      break;
+    }
+
+    case "renameSession": {
+      const sessions = ctx.getSessions();
+      const newName = await promptRenameSession(msg.sessionId, sessions);
+      if (newName !== null) {
+        const state = renameSession(msg.sessionId, newName);
+        // Update cached session in-place instead of re-parsing all from disk
+        const target = sessions.find((s) => s.id === msg.sessionId);
+        if (target) target.name = newName.trim();
+        wv.postMessage({ type: "sessions", data: groupSessions(sessions), stats: getStats(sessions) });
+        postWorktrees(wv, sessions);
+        wv.postMessage({ type: "userState", ...state });
+        // Refresh detail view if showing this session
+        if (target) {
+          const updated = parseSessionDetail(msg.sessionId, target);
+          if (updated) wv.postMessage({ type: "sessionDetail", data: updated });
+        }
+      }
+      break;
+    }
+
+    case "copyCommand":
+      copyResumeCommand(msg.sessionId);
+      break;
+
+    case "resumeSession":
+      if (msg.fresh && msg.continueTask) {
+        vscode.window.showErrorMessage("Choose either Continue task or Resume after account switch.");
+      } else if (msg.continueTask) await continueStoppedTask(msg.sessionId, ctx.getSessions());
+      else if (msg.fresh) await resumeAfterAccountSwitch(msg.sessionId, ctx.getSessions());
+      else await resumeSession(msg.sessionId, false, ctx.getSessions());
+      break;
+
+    case "createWorktree":
+      // Recreate a Claude worktree that was removed from disk (behind a
+      // confirm modal) and resume the session inside it — or just resume
+      // if the worktree is still present.
+      await createWorktreeForSession(msg.sessionId, ctx.getSessions());
+      break;
+
+    case "viewTerminal":
+      // Reveal a registered terminal or the official chat according to origin.
+      // An untracked external CLI is explained without spawning another client.
+      await viewRunningSession(msg.sessionId, ctx);
+      break;
+
+    case "resumeMultiple": {
+      if (msg.sessionIds.length === 0) {
+        vscode.window.showInformationMessage(
+          "Nothing to restore — no sessions recorded for this project yet.",
+        );
+        break;
+      }
+
+      const sessions = ctx.getSessions();
+      const byId = new Map(sessions.map((s) => [s.id, s]));
+
+      // Split before doing anything: a session that is already live has a
+      // running `claude` process, and a second `claude --resume` on the same id
+      // fights it. Focus its terminal instead — the same Resume/View swap the
+      // single-session row does when isLive or a terminal is tracked.
+      const focus: string[] = [];
+      const toResume: string[] = [];
+      for (const id of msg.sessionIds) {
+        if (byId.get(id)?.isLive || ctx.terminals.has(id)) focus.push(id);
+        else toResume.push(id);
+      }
+
+      // Spawning several terminals at once rearranges the editor, so confirm
+      // past a handful rather than surprising the user with 8 new tabs.
+      if (toResume.length > 4) {
+        const choice = await vscode.window.showWarningMessage(
+          `Restore ${toResume.length} sessions?`,
+          { modal: true, detail: `This opens ${toResume.length} terminals in this window.` },
+          "Restore",
+        );
+        if (choice !== "Restore") break;
+      }
+
+      // Sequential with a short delay between iterations: VS Code
+      // registers a new terminal's tab in tabGroups.all asynchronously,
+      // so calling createTerminal() in a tight loop made the second
+      // and later terminals see an empty tab list and open in fresh
+      // editor groups. The 80ms gap gives VS Code's event loop a tick
+      // to register the previous tab before findExistingTerminalColumn
+      // runs again — the result is all restored terminals stacked as
+      // tabs in a single editor group instead of N split panels.
+      // Force the terminal path: the Claude Code extension chat tab is
+      // single-instance, so routing a multi-session restore through it
+      // collapses every session into one panel and only the last survives.
+      for (let i = 0; i < toResume.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 80));
+        await resumeSession(toResume[i], false, sessions, true);
+      }
+
+      // Focus the already-running terminals only when nothing new was
+      // spawned; otherwise revealing them would steal focus from the terminals
+      // this click just created. A note explains why they were skipped.
+      if (toResume.length === 0) {
+        for (const id of focus) await viewRunningSession(id, ctx);
+      } else if (focus.length > 0) {
+        vscode.window.showInformationMessage(
+          `${focus.length} session${focus.length === 1 ? " was" : "s were"} already running — left untouched.`,
+        );
+      }
+      break;
+    }
+
+    case "copyMarkdown":
+      copyMarkdown(msg.sessionId, ctx.getSessions());
+      break;
+
+    case "exportSession":
+      await exportSessionFile(msg.sessionId, ctx.getSessions());
+      break;
+
+    case "bulkPinSessions": {
+      // One state read + write covers every id, then a single
+      // `userState` reply keeps the webview re-renders coalesced.
+      const state = msg.pin
+        ? bulkPinState(msg.ids)
+        : bulkUnpinState(msg.ids);
+      wv.postMessage({ type: "userState", ...state });
+      break;
+    }
+
+    case "bulkDeleteSessions": {
+      if (msg.ids.length === 0) break;
+      const choice = await vscode.window.showWarningMessage(
+        `Delete ${msg.ids.length} session${msg.ids.length === 1 ? "" : "s"}?`,
+        {
+          modal: true,
+          detail:
+            "Selected sessions will be hidden from the list. The .jsonl files on disk are not removed; running `claude --resume` against them in a terminal still works.",
+        },
+        "Delete",
+      );
+      if (choice !== "Delete") break;
+      const state = bulkDeleteState(msg.ids);
+      wv.postMessage({ type: "userState", ...state });
+      wv.postMessage({ type: "navigateList" });
+      break;
+    }
+
+    case "bulkExportSessions":
+      await bulkExportSessionFiles(msg.ids, ctx.getSessions());
+      break;
+
+    case "importSession":
+      // Re-parse so the imported session shows up in the list. The shared
+      // helper also re-posts workspace path + temp ids and rebuilds the index.
+      await importSessionFile(ctx.getSessions(), () => reparseAndPushSessions(ctx));
+      break;
+
+    case "importMultipleSessions":
+      // Bulk import (zip and/or loose jsonl). Same reload callback so every
+      // imported session appears; no terminals are launched.
+      await importMultipleSessionFiles(ctx.getSessions(), () => reparseAndPushSessions(ctx));
+      break;
+
+    case "openUrl":
+      vscode.env.openExternal(vscode.Uri.parse(msg.url));
+      break;
+
+    // ── Generic file open ──
+
+    case "openFile": {
+      const filePath = (msg as { type: string; path: string }).path;
+      try {
+        const doc = await vscode.workspace.openTextDocument(filePath);
+        await vscode.window.showTextDocument(doc);
+      } catch {
+        vscode.window.showErrorMessage(`Could not open ${filePath}`);
+      }
+      break;
+    }
+
+    default:
+      return false;
+  }
+  return true;
+}

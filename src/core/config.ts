@@ -1,0 +1,178 @@
+/**
+ * Path constants for Claude CLI data directories.
+ * Pure Node.js — no VS Code dependency.
+ */
+import * as path from "path";
+import * as os from "os";
+
+/** Root directory for Claude CLI data (~/.claude) */
+export const CLAUDE_DIR: string = path.join(os.homedir(), ".claude");
+
+/** Path to the global history.jsonl file */
+export const HISTORY_FILE: string = path.join(CLAUDE_DIR, "history.jsonl");
+
+/** Directory containing per-project session JSONL files */
+export const PROJECTS_DIR: string = path.join(CLAUDE_DIR, "projects");
+
+/** Directory containing session name/metadata JSON files */
+export const SESSIONS_DIR: string = path.join(CLAUDE_DIR, "sessions");
+
+/**
+ * Root of Claude Code's per-file version backups
+ * (`~/.claude/file-history/<sessionId>/<pathHash>@v<N>`). Each blob is the
+ * full contents of one file at one point in a session; there is no index
+ * file — the path↔blob mapping only exists in the session transcript's
+ * `file-history-snapshot` lines. Claude Code prunes this tree on its own
+ * `cleanupPeriodDays` schedule, so a blob the transcript still cites can
+ * legitimately be gone.
+ */
+export const FILE_HISTORY_DIR: string = path.join(CLAUDE_DIR, "file-history");
+
+/** Path to the extension's user state file (pins/deletes) */
+export const STATE_FILE: string = path.join(CLAUDE_DIR, ".csm-state.json");
+
+/** Claude CLI's pre-aggregated stats cache (what /stats reads). */
+export const STATS_CACHE_FILE: string = path.join(CLAUDE_DIR, "stats-cache.json");
+
+/** Global Claude CLI settings file (~/.claude/settings.json). */
+export const SETTINGS_FILE: string = path.join(CLAUDE_DIR, "settings.json");
+
+/**
+ * The three Claude Code settings files: global (~/.claude/settings.json),
+ * project (.claude/settings.json, committed), and local
+ * (.claude/settings.local.json, personal/gitignored).
+ */
+export type ClaudeSettingsScope = "global" | "project" | "local";
+
+/**
+ * Resolve the settings file path for a scope. Project/local scopes
+ * need a workspace; without one they resolve to null.
+ */
+export function claudeSettingsPath(
+  scope: ClaudeSettingsScope,
+  workspacePath?: string,
+): string | null {
+  if (scope === "global") return SETTINGS_FILE;
+  if (!workspacePath) return null;
+  const name = scope === "local" ? "settings.local.json" : "settings.json";
+  return path.join(workspacePath, ".claude", name);
+}
+
+/**
+ * Cache Claude Code writes when an MCP server needs (re-)authentication.
+ * Keys are server display names (e.g. "claude.ai Gmail"); presence means
+ * Claude Code surfaced an auth prompt for that connector at the
+ * recorded timestamp. We badge the MCP tab so users see which
+ * connectors need re-auth without opening Claude.
+ */
+export const MCP_AUTH_CACHE_FILE: string = path.join(
+  CLAUDE_DIR,
+  "mcp-needs-auth-cache.json",
+);
+
+/** Number of bytes to read from a session file for metadata extraction */
+export const SESSION_META_READ_BYTES: number = 4096;
+
+/**
+ * Where settings.json snapshots are kept before each mutation. Lives
+ * under ~/.claude/ (not the workspace) so it survives `git clean` and
+ * project switches. The directory is rotated to keep the most recent
+ * N entries per scope; see src/features/account/snapshots.ts.
+ */
+export const SETTINGS_SNAPSHOTS_DIR: string = path.join(
+  CLAUDE_DIR,
+  ".claude-manager-snapshots",
+);
+
+/**
+ * Claude Manager's own state directory under ~/.claude. Holds the
+ * statusline tap script + the cache it writes. Lives beside Claude
+ * CLI's own files so the tap (a separate Node process spawned by
+ * Claude Code) can find it without knowing the extension install path.
+ */
+export const CLAUDE_MANAGER_DIR: string = path.join(CLAUDE_DIR, ".claude-manager");
+
+/**
+ * Cache the statusline tap writes on every render: live rate-limit
+ * windows, current model, context-window usage, and session cost —
+ * data Claude Code computes server-side and hands its statusline.
+ * Reading this file is how Claude Manager surfaces 5h/7d quota WITHOUT
+ * making any network call or touching the OAuth token: Claude Code (the
+ * authorized client) fetches it, the tap caches it, we read the cache.
+ */
+export const STATUSLINE_CACHE_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "statusline.json",
+);
+
+/**
+ * Stable on-disk location of the tap script. The installer copies the
+ * bundled script here and points `statusLine.command` at it, so the
+ * path survives extension updates (which change the versioned
+ * extension directory).
+ */
+export const STATUSLINE_TAP_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "statusline-tap.js",
+);
+
+/**
+ * Sidecar that records the user's original `statusLine.command` when
+ * the tap is installed, so the tap can chain it (keeping the user's own
+ * status bar intact) and the uninstaller can restore it exactly.
+ */
+export const STATUSLINE_INNER_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "statusline-inner.json",
+);
+
+/**
+ * Persistent daily usage rollup maintained by the extension. Claude
+ * CLI's `cleanupPeriodDays` purges old transcripts and (on some
+ * installs) `stats-cache.json` never materialises, so without this
+ * file usage history silently truncates to the retention window. The
+ * extension folds every aggregate pass into this rollup (element-wise
+ * max per day), so history survives transcript cleanup permanently.
+ */
+export const USAGE_HISTORY_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "usage-history.json",
+);
+
+/**
+ * Last-seen quota per account, remembered by the extension.
+ *
+ * Claude Code's statusline cache is global and carries no account id, so
+ * the moment you switch profiles the live figures belong to whoever is
+ * signed in now — there is no way to ask it what the OTHER account had
+ * left. This file is that memory: each account's last observed windows,
+ * stamped with the render they came from, so the switcher can say which
+ * account has headroom before you commit to switching into it.
+ */
+export const QUOTA_HISTORY_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "quota-history.json",
+);
+
+/**
+ * SessionStart hook script: a tiny Node program Claude CLI runs on every
+ * session boot. Records `{ session_id, ppid, cwd, ts }` into the active
+ * sessions file so the extension can link a sidebar row to the terminal
+ * actually hosting that CLI. Stable path so settings.json hook entries
+ * survive extension updates.
+ */
+export const SESSION_TAP_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "session-start-tap.js",
+);
+
+/**
+ * Append-only registry of currently-running Claude sessions. The
+ * SessionStart hook adds one entry per session boot; the extension
+ * reads it to map `vscode.Terminal.processId` → session id so the row
+ * + detail action swap from Resume to View.
+ */
+export const SESSION_ACTIVE_FILE: string = path.join(
+  CLAUDE_MANAGER_DIR,
+  "active-sessions.json",
+);

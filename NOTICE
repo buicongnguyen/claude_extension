@@ -1,0 +1,17 @@
+Claude Code Manager Personal
+
+This product includes a modified version of Claude Code Manager:
+https://github.com/vishalguptax/claude-code-manager
+Original author: Vishal Gupta and contributors.
+Upstream release: 2.15.1, commit c9a8181c8d2ef5ba25199517c2bde6ff04ef9531.
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+Personal fork modifications, September 2026: encrypted account snapshot storage,
+safe terminal input staging, profile path validation, credential locking,
+activation guards, atomic snapshots, account-bound update confirmations, recoverable
+live switches, concurrent initialization retries, regression tests and personal
+installation documentation.
+Additional personal fork modifications, October 2026: fresh session recovery after
+account switching, chat handoff handling, terminal lifecycle tracking and portable
+branch checkout before resume, and explicit post-reset task continuation.
+This is not an upstream release or an official Anthropic product.

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.vsix binary
+*.png binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+docs/releases/v2.0.0-WIP.md merge=union

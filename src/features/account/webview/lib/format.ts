@@ -1,0 +1,517 @@
+/**
+ * Pure formatting + small derivation helpers for the account webview.
+ * No DOM, no Preact — extracted from the v1 `view.ts` so the numeric /
+ * string logic can be unit-tested directly and reused across
+ * components without dragging in render code.
+ */
+
+import type { AccountData, UsageStats } from "../../types";
+import type {
+  PromptCacheMissCause,
+  StatuslinePullRequest,
+  StatuslineRepo,
+} from "../../statuslineCore";
+import { cutoffDaysForPeriod, type Period } from "./heatmap";
+
+// Note: the model-picker option builder lived here in v1 but the Account
+// tab is identity-only now (Profile + Quota + Usage); model selection
+// moved to the Config tab. Kept the file lean — no dead dropdown logic.
+
+/**
+ * Compact large numbers: 1.2B / 345M / 12.4K / 987.
+ *
+ * Scales through B because lifetime cache-read totals cross a billion
+ * tokens on heavy use, and without a B step those rendered as a
+ * five-digit "M" figure that no one can read at a glance.
+ *
+ * One decimal, and a trailing ".0" is trimmed — "2M" beats "2.0M" in a
+ * stat tile, and three significant digits is as much precision as a
+ * summary number earns. Negatives keep their sign; anything
+ * non-finite renders as "0" rather than "NaN".
+ */
+export function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${sign}${trimTenth(abs / 1_000_000_000)}B`;
+  if (abs >= 1_000_000) return `${sign}${trimTenth(abs / 1_000_000)}M`;
+  if (abs >= 1_000) return `${sign}${trimTenth(abs / 1_000)}K`;
+  return n.toLocaleString();
+}
+
+/** One decimal place, with a redundant ".0" dropped. */
+function trimTenth(v: number): string {
+  const s = v.toFixed(1);
+  return s.endsWith(".0") ? s.slice(0, -2) : s;
+}
+
+/** Format a ratio in [0, 1] as an integer percent. Falls back to "—". */
+export function formatPct(ratio: number): string {
+  if (!Number.isFinite(ratio) || ratio <= 0) return "—";
+  return `${Math.round(ratio * 100)}%`;
+}
+
+/** Format ms duration as "11d 23h 57m" or "22h 4m". */
+export function formatDuration(ms: number): string {
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  const mins = Math.floor((ms % 3600000) / 60000);
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+/**
+ * Shorten a model id: "claude-sonnet-4-5-20250929" -> "Sonnet 4.5",
+ * "claude-opus-5[1m]" -> "Opus 5 (1M)".
+ *
+ * The family is matched as any word rather than a fixed list, so a
+ * family released after this build still renders as a name instead of
+ * a raw id. The `[1m]` suffix Claude Code appends for the 1M-context
+ * variant is surfaced, not swallowed — two rows both reading "Opus 5"
+ * would be indistinguishable in the breakdown.
+ */
+export function formatModelName(model: string): string {
+  const m = model.match(/claude-([a-z]{3,12})-(\d+)-?(\d*)/i);
+  if (!m) return model;
+  const name = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+  const version = m[3] ? `${m[2]}.${m[3]}` : m[2];
+  const variant = /\[1m\]/i.test(model) ? " (1M)" : "";
+  return `${name} ${version}${variant}`;
+}
+
+/**
+ * ISO 4217 minor-unit decimal counts. The OAuth /usage endpoint and
+ * the cost estimates store money in the currency's minor unit (cents,
+ * fils, etc.); we divide by 10^digits before rendering. Zero- and
+ * three-decimal currencies both occur in the wild — treating
+ * everything as two decimals showed AUD users "23346.00" for $233.46.
+ */
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW",
+  "PYG", "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF",
+  "XPF", "XAG", "XAU", "XDR", "XSU", "XUA",
+]);
+const THREE_DECIMAL_CURRENCIES = new Set([
+  "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND",
+]);
+const FOUR_DECIMAL_CURRENCIES = new Set(["CLF", "UYW"]);
+
+export function currencyFractionDigits(currency: string): number {
+  const code = currency.toUpperCase();
+  if (ZERO_DECIMAL_CURRENCIES.has(code)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(code)) return 3;
+  if (FOUR_DECIMAL_CURRENCIES.has(code)) return 4;
+  return 2;
+}
+
+/**
+ * Render a minor-unit integer as a locale-formatted currency string
+ * via Intl.NumberFormat. Falls back to "${major} ${currency}" when
+ * Intl rejects the code (very old runtime, unknown ISO code).
+ */
+export function formatMoney(minorUnits: number, currency: string): string {
+  const digits = currencyFractionDigits(currency);
+  const major = minorUnits / 10 ** digits;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(major);
+  } catch {
+    return `${major.toFixed(digits)} ${currency}`;
+  }
+}
+
+/**
+ * Turn an ISO timestamp into a human "resets in" string — days when
+ * >=24h, hours when >=1h, otherwise minutes.
+ */
+export function formatResetsIn(isoResetsAt: string, now: number = Date.now()): string {
+  if (!isoResetsAt) return "";
+  const resetMs = Date.parse(isoResetsAt);
+  if (Number.isNaN(resetMs)) return "";
+  const diffMs = resetMs - now;
+  // A reset time in the past means the cached window already rolled over
+  // since Claude Code last rendered — the figure is stale, not "resetting
+  // now". Surface staleness instead of a misleading countdown.
+  if (diffMs <= 0) return "outdated · open Claude to refresh";
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 60) return `resets in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) {
+    const leftoverMin = mins % 60;
+    return leftoverMin > 0 ? `resets in ${hours}h ${leftoverMin}m` : `resets in ${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  const leftoverHours = hours % 24;
+  return leftoverHours > 0 ? `resets in ${days}d ${leftoverHours}h` : `resets in ${days}d`;
+}
+
+/**
+ * Format "Fetched Xm ago" relative to now — tight, scannable. `now` is
+ * injectable so the relative string is deterministic in tests; callers
+ * normally omit it and get wall-clock.
+ */
+export function formatFetchedRelative(iso: string, now: number = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "just now";
+  const diff = now - t;
+  if (diff < 10_000) return "just now";
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return `${Math.floor(diff / 1000)}s ago`;
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+/**
+ * Past this age the cached quota is treated as "idle" — no Claude render
+ * has refreshed it recently, so the bars are last-known rather than live.
+ * 10 min comfortably exceeds an active session's render cadence (every
+ * turn) without flapping during a brief pause between prompts.
+ */
+export const QUOTA_STALE_AFTER_MS = 10 * 60_000;
+
+export interface QuotaFreshness {
+  /** Relative age of the capture, e.g. "5m ago". */
+  text: string;
+  /** True once the capture is old enough to be "idle" / last-known. */
+  stale: boolean;
+}
+
+/**
+ * Freshness of the cached quota. The quota number is fetched by Claude
+ * Code (the only authorized client) and cached on its statusline render;
+ * we can only read that cache, never force a server fetch. So when no
+ * render has happened recently the figure is last-known, not live — this
+ * lets the UI say so instead of presenting frozen bars as current.
+ */
+export function quotaFreshness(capturedIso: string, now: number = Date.now()): QuotaFreshness {
+  const t = Date.parse(capturedIso);
+  if (Number.isNaN(t)) return { text: "just now", stale: false };
+  return { text: formatFetchedRelative(capturedIso, now), stale: now - t >= QUOTA_STALE_AFTER_MS };
+}
+
+/** Capitalize a subscription slug for display: "max" → "Max". */
+export function formatPlanName(sub: string): string {
+  if (!sub) return "";
+  return sub.charAt(0).toUpperCase() + sub.slice(1);
+}
+
+/**
+ * Human plan label, matching Anthropic's plan vocabulary (Free / Pro /
+ * Max 5x / Max 20x / Team). The tier *family* comes from
+ * `subscriptionType`; the usage multiplier is appended only when the
+ * `rateLimitTier` slug carries the parseable "Nx" form (e.g.
+ * "default_claude_max_20x" → "Max 20x"). Lowercase "x" matches Anthropic's
+ * own naming.
+ *
+ * Team is shown bare ("Team"): the Standard (1.25×) vs Premium (6.25×)
+ * seat is NOT in any decodable local field — the slug is an opaque
+ * codename ("default_raven"), and the only model signals on disk
+ * (`settings.json` model, the live model) reflect the *user's* choice,
+ * not the seat's recommended default. Anthropic doesn't write the seat
+ * default anywhere we can read, so inferring it would just be reading
+ * back the user's own override — we don't guess. Price is excluded too
+ * (region/currency marketing data, not account data).
+ */
+export function formatPlan(subscriptionType: string, rateLimitTier: string): string {
+  const family = formatPlanName(subscriptionType);
+  if (!family) return "";
+  const slugMult = rateLimitTier.match(/(\d+)\s*x/i);
+  return slugMult ? `${family} ${slugMult[1]}x` : family;
+}
+
+/**
+ * Format an ISO date as "Mon YYYY" (e.g. "Mar 2024") for the "plan since"
+ * row. Returns "" when the timestamp is missing or unparseable so the
+ * caller can omit the row entirely.
+ */
+export function formatJoinedDate(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short" });
+}
+
+/** Utilization colour tier — drives the bar's mood as the cap nears. */
+export function quotaTone(utilizationPct: number): "low" | "mid" | "high" {
+  if (utilizationPct >= 80) return "high";
+  if (utilizationPct >= 50) return "mid";
+  return "low";
+}
+
+/**
+ * Trim a project path to its trailing 2–3 segments so the row stays
+ * scannable in a narrow sidebar. Handles real cwd paths (`\` or `/`)
+ * and slug fallbacks (`-`-joined). Full path is kept in a tooltip by
+ * the caller.
+ */
+export function shortenProjectPath(p: string): string {
+  if (!p) return "(unknown)";
+  const parts = p.split(/[\\/]/).filter(Boolean);
+  if (parts.length >= 2) return parts.slice(-2).join("/");
+  const slugParts = p.split("-").filter(Boolean);
+  if (slugParts.length >= 3) return slugParts.slice(-3).join("-");
+  return p;
+}
+
+/**
+ * Friendly display name for a tool. MCP tools (`mcp__server__name`)
+ * collapse to `server: name`; built-in tools render verbatim.
+ */
+export function displayToolName(name: string): string {
+  if (name.startsWith("mcp__")) {
+    const rest = name.slice(5);
+    const sep = rest.indexOf("__");
+    if (sep > 0) return `${rest.slice(0, sep)}: ${rest.slice(sep + 2)}`;
+  }
+  return name;
+}
+
+/** Tooltip for the cache-hit tile — explains the prompt-cache math. */
+export function cacheHitTooltip(u: UsageStats): string {
+  const denom =
+    u.totalCacheReadTokens + u.totalCacheCreationTokens + u.totalInputTokens;
+  if (denom === 0) return "No cache activity recorded yet.";
+  // Denominator matches cacheHitRatioOf exactly — writes included,
+  // since a token is written once before it can ever be read.
+  return (
+    `${formatNumber(u.totalCacheReadTokens)} tokens served from prompt cache out of ` +
+    `${formatNumber(denom)} prompt-input tokens ` +
+    `(${formatNumber(u.totalCacheCreationTokens)} written to cache, ` +
+    `${formatNumber(u.totalInputTokens)} never cached).`
+  );
+}
+
+/**
+ * Explains what the "tokens" tile counts. Cache reads dominate on any
+ * cache-heavy profile, so a bare 9-figure number invites the reading
+ * "I generated this much", which is off by orders of magnitude.
+ */
+export function tokenTotalTooltip(u: UsageStats, totals: UsageTotals): string {
+  const parts = [
+    `Input + output only — the tokens this period actually produced.`,
+    `Prompt-cache traffic is excluded: ${formatNumber(u.totalCacheReadTokens)} ` +
+      `read and ${formatNumber(u.totalCacheCreationTokens)} written lifetime, ` +
+      `which is mostly the same context re-read on every request.`,
+  ];
+  const { withBreakdown, active } = totals.tokenDayCoverage;
+  if (withBreakdown < active) {
+    parts.push(
+      `${withBreakdown} of ${active} active days counted — Claude Code ` +
+        `stores one combined figure per day, so days whose transcripts ` +
+        `have been cleaned up can't be broken down.`,
+    );
+  }
+  return parts.join(" ");
+}
+
+/** Period-filtered usage aggregates for the Usage section. */
+export interface UsageTotals {
+  /** input + output within the period — see computeUsageTotals. */
+  tokenTotal: number;
+  /**
+   * How many of the period's active days actually had a per-bucket
+   * breakdown available. `withBreakdown < active` means older days were
+   * counted in the activity figures but could not contribute tokens.
+   */
+  tokenDayCoverage: { withBreakdown: number; active: number };
+  sessions: number;
+  messages: number;
+  activeInPeriod: number;
+  totalInPeriod: number;
+}
+
+/**
+ * Aggregate usage stats for the selected period. Anchors the filter to
+ * the most recent recorded day (matching the stats-cache `lastComputedDate`
+ * convention) so the windows stay consistent with the heatmap.
+ */
+export function computeUsageTotals(u: UsageStats, period: Period): UsageTotals {
+  const latestDataDate =
+    u.daily && u.daily.length > 0
+      ? u.daily[u.daily.length - 1].date
+      : new Date().toISOString().slice(0, 10);
+  const anchor = new Date(latestDataDate).getTime();
+  const cutoffDays = cutoffDaysForPeriod(period);
+  const withinPeriod = (date: string): boolean =>
+    cutoffDays === Number.POSITIVE_INFINITY ||
+    (anchor - new Date(date).getTime()) / 86400000 < cutoffDays;
+
+  // Defensive defaults: `accountData` crosses the host boundary as `unknown`
+  // and is cast, so a partial or older payload can omit a series. Reading
+  // `.filter` off an undefined one throws during render, and because this runs
+  // inside UsageBody the ErrorBoundary blanks the ENTIRE panel — the whole
+  // Account tab replaced by "Something went wrong" over one missing array.
+  // PermissionsView already guards its own list for exactly this reason.
+  const filteredActivity = (u.daily ?? []).filter((d) => withinPeriod(d.date));
+  const filteredTokens = (u.dailyOwnTokens ?? []).filter((d) => withinPeriod(d.date));
+
+  const activeInPeriod = filteredActivity.filter((d) => d.messageCount > 0).length;
+  const totalInPeriod = cutoffDays === Number.POSITIVE_INFINITY ? u.totalDays : cutoffDays;
+
+  const sessions =
+    period === "all"
+      ? u.totalSessions
+      : filteredActivity.reduce((acc, d) => acc + d.sessionCount, 0);
+
+  const messages =
+    period === "all"
+      ? u.totalMessages
+      : filteredActivity.reduce((acc, d) => acc + d.messageCount, 0);
+
+  // "Tokens" means the work done — input + output — not the cache
+  // re-reads that dwarf it. On a real profile the two differ by ~700x:
+  // 26.5M generated against 17.5B re-read, because every request
+  // re-reads the whole cached prefix. Leading with the combined figure
+  // is what produces the "I used 54 billion tokens" reaction; it
+  // measures the billing mechanism, not the user.
+  //
+  // All-time comes from the lifetime per-bucket counters, which are
+  // exact. Shorter periods sum `dailyOwnTokens`, which covers only days
+  // a transcript still survives for — `tokenDayCoverage` reports how
+  // many, so the UI can say so instead of implying a quiet week.
+  const tokenTotal =
+    period === "all"
+      ? u.totalInputTokens + u.totalOutputTokens
+      : filteredTokens.reduce((sum, d) => sum + d.total, 0);
+  // All-time reads the lifetime per-bucket counters, which are exact and
+  // owe nothing to per-day coverage — reporting a shortfall there would
+  // claim missing data that isn't missing. Shorter periods sum per-day
+  // rows, so their coverage is real.
+  const activeDaysInPeriod = filteredActivity.filter(
+    (d) => d.messageCount > 0,
+  ).length;
+  const tokenDayCoverage =
+    period === "all"
+      ? { withBreakdown: activeDaysInPeriod, active: activeDaysInPeriod }
+      : { withBreakdown: filteredTokens.length, active: activeDaysInPeriod };
+
+  return {
+    tokenTotal,
+    tokenDayCoverage,
+    sessions,
+    messages,
+    activeInPeriod,
+    totalInPeriod,
+  };
+}
+
+/**
+ * Identity key for the active account — email + profile slug. A change
+ * across an `accountData` message means the user switched accounts, so
+ * the quota cache must be invalidated. Slug disambiguates a null-slug
+ * "unsaved" account from a saved one with the same email.
+ */
+export function accountKey(data: AccountData): string {
+  const slug = data.activeProfileSlug ?? "";
+  const email = data.profile.email ?? "";
+  return `${slug}|${email}`;
+}
+
+/**
+ * Abbreviated currency for tight columns: $22.4K, $1.5M, $345.12.
+ * Below $1,000 we keep two decimals so small spend reads exactly;
+ * above that, one decimal + K/M suffix keeps the figure two-or-three
+ * characters wide so seven legend rows still line up at narrow widths.
+ */
+export function formatMoneyCompact(minorUnits: number, currency: string): string {
+  const digits = currencyFractionDigits(currency);
+  const major = minorUnits / 10 ** digits;
+  const sign = major < 0 ? "-" : "";
+  const abs = Math.abs(major);
+  const symbol = currency.toUpperCase() === "USD" ? "$" : currency;
+  if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}${symbol}${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}${symbol}${abs.toFixed(digits)}`;
+}
+
+/**
+ * Human-readable gloss for a prompt-cache miss diagnosis.
+ *
+ * Claude Code names causes in snake_case from a set that grows across
+ * releases, so unknown names must still render: anything we do not have
+ * a phrase for falls back to the name with underscores turned into
+ * spaces, which reads acceptably for every name in the set so far
+ * ("likely_server_side" → "likely server side").
+ *
+ * Multiple causes are joined because Claude reports them together when
+ * one turn invalidated the prefix in more than one way.
+ */
+const MISS_CAUSE_PHRASES: Record<string, string> = {
+  system_prompt_changed: "the system prompt changed",
+  tools_changed: "the tool set changed",
+  model_changed: "the model changed",
+  messages_rewritten: "earlier messages were rewritten",
+  ttl_expired_5m: "the 5m cache expired",
+  ttl_expired_1h: "the 1h cache expired",
+  likely_server_side: "a server-side eviction",
+  unknown: "an undiagnosed change",
+};
+
+export function formatMissCause(cause: PromptCacheMissCause | null): string {
+  if (!cause || cause.causes.length === 0) return "";
+  const phrases = cause.causes.map(
+    (name) => MISS_CAUSE_PHRASES[name] ?? name.replace(/_/g, " "),
+  );
+  const joined =
+    phrases.length === 1
+      ? phrases[0]
+      : `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
+  // Tool churn is the one cause with a number worth showing — it is
+  // usually an MCP server connecting or dropping mid-session, which the
+  // user can act on. The others carry no actionable magnitude.
+  const net = cause.toolsAdded + cause.toolsRemoved;
+  if (net > 0 && cause.causes.includes("tools_changed")) {
+    const parts: string[] = [];
+    if (cause.toolsAdded > 0) parts.push(`+${cause.toolsAdded}`);
+    if (cause.toolsRemoved > 0) parts.push(`-${cause.toolsRemoved}`);
+    return `${joined} (${parts.join(" / ")} tools)`;
+  }
+  return joined;
+}
+
+/**
+ * The forge that needs no naming. Every other host is spelled out, so a
+ * self-hosted GitLab or a Bitbucket remote is distinguishable at a
+ * glance, while the overwhelmingly common case stays "owner/name".
+ */
+const IMPLIED_REPO_HOST = "github.com";
+
+/**
+ * Repository identity as one line: "owner/name", or "host/owner/name"
+ * when the remote is not on github.com. "" when there is no repo.
+ */
+export function formatRepo(repo: StatuslineRepo | null): string {
+  if (!repo) return "";
+  const path = `${repo.owner}/${repo.name}`;
+  return repo.host && repo.host !== IMPLIED_REPO_HOST ? `${repo.host}/${path}` : path;
+}
+
+/**
+ * The PR/MR reference as each forge writes it: "#123" for a GitHub pull
+ * request, "!123" for a GitLab merge request. The convention is GitLab's
+ * own and is stated in Claude Code's schema, which is why `kind` exists
+ * at all — the number alone cannot tell the two apart.
+ */
+export function formatPrRef(pr: StatuslinePullRequest | null): string {
+  if (!pr) return "";
+  return `${pr.kind === "mr" ? "!" : "#"}${pr.number}`;
+}
+
+/**
+ * Review status as a chip label.
+ *
+ * Claude Code names these in snake_case from a set it owns and that
+ * grows across releases, so an unrecognised value is de-underscored and
+ * shown rather than dropped: a state we have never seen is still
+ * information, and hiding it would silently under-report the PR.
+ */
+export function formatReviewState(state: string): string {
+  return state.replace(/_/g, " ");
+}

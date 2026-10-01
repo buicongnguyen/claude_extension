@@ -1,0 +1,1102 @@
+/* ============================================================================
+   Claude Manager — Account Tab Styles
+   Profile, Usage (with heatmap), Settings, Permissions sections
+   ============================================================================ */
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Sections — collapsible cards
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Profile
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.acct-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.acct-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/*
+ * Clickable avatar variant — doubles as a Switch-account affordance.
+ * Subtle outline on hover + focus so the button nature is obvious
+ * without shouting. Reset button defaults so the element keeps the
+ * circular token-tile look.
+ */
+.acct-avatar-btn {
+  /* Reset every button default that shifts the letter off-center:
+     box-sizing, line-height, padding, font baselining. Flex centering
+     inherited from .acct-avatar handles alignment once defaults are
+     cleared. */
+  box-sizing: border-box;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  font-family: inherit;
+  /* Explicitly inherit font-size + weight from the base .acct-avatar
+     class; without this, browser-default button font-size (smaller
+     than inherit) pulls the initial down-right. */
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--badge-fg);
+  transition: box-shadow var(--transition-control), transform var(--transition-control);
+}
+.acct-avatar-btn:hover {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.acct-avatar-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.acct-avatar-btn:active { transform: scale(0.96); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-avatar-btn { transition: none; }
+  .acct-avatar-btn:active { transform: none; }
+}
+
+.acct-profile-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.acct-name {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acct-email {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acct-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-xs) var(--space-md);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  /* Mixed case (not uppercased) so the label reads as Anthropic names it:
+     "Max 20x", "Team 6.25x", "Pro" — the lowercase multiplier "x" survives. */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Plan tiers. These were the last raw hex literals in the stylesheets
+   (#FF9966, #58a6ff, #a371f7, plus three rgba borders spelled out by hand).
+   The palette is unchanged — the same values already existed as tokens, or
+   have been added as one — but they now resolve through the token layer like
+   every other colour, so a future palette change reaches them too.
+
+   The border is derived from the text colour rather than restated, so a tone
+   cannot end up with a fill and an edge that disagree. */
+.acct-plan-badge.plan-max,
+.acct-plan-badge.plan-pro,
+.acct-plan-badge.plan-team {
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+}
+.acct-plan-badge.plan-max  { background: var(--color-amber-bg); color: var(--color-amber); }
+.acct-plan-badge.plan-pro  { background: var(--color-blue-bg); color: var(--color-blue); }
+.acct-plan-badge.plan-team { background: var(--color-purple-bg); color: var(--color-purple); }
+.acct-plan-badge.plan-free { background: var(--badge-neutral-bg); color: var(--badge-neutral-fg); }
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Meta rows (key/value)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.acct-meta {
+  margin: var(--space-md) 0;
+}
+
+/*
+ * Profile plan details. Aligns every key into one column and every value
+ * into the next so the block reads as a tidy table, not a ragged stack of
+ * rows (the keys "Organization" / "Plan since" / "Credentials" differ in
+ * width, which left the values jagged before). `display: contents` lets
+ * each shared MetaRow's two spans flow directly into the grid tracks.
+ * A hairline rule + top padding separates the details from the identity
+ * header above so the hierarchy is legible at a glance.
+ */
+.acct-meta-profile {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: var(--space-lg);
+  row-gap: var(--space-sm);
+  align-items: baseline;
+  /* The identity header already carries a bottom margin; rely on that for
+     the gap above the divider so the spacing isn't doubled. */
+  margin-top: 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+.acct-meta-profile .acct-meta-row {
+  display: contents;
+}
+.acct-meta-profile .acct-meta-k {
+  font-size: var(--fs-sm);
+}
+.acct-meta-profile .acct-meta-v {
+  font-size: var(--fs-sm);
+  /* Values share column 2 and start at the same x, so the pairs line up.
+     Left-aligned (not flush-right) keeps ellipsis on long org names tidy. */
+  max-width: 100%;
+}
+
+/*
+ * Corrupted-config banner — shown at the top of the Profile section
+ * when ~/.claude.json is empty or invalid. Semi-transparent warning
+ * color so it reads clearly on any theme without overpowering the
+ * panel hierarchy.
+ */
+.acct-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-lg);
+  background: var(--orange-bg);
+  border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+}
+.acct-banner svg { color: var(--orange); flex-shrink: 0; margin-top: 2px; }
+.acct-banner-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+.acct-banner-text strong { color: var(--fg); font-weight: 600; }
+.acct-banner-text span { color: var(--fg-dim); }
+.acct-banner .btn { flex-shrink: 0; }
+
+.acct-meta-row {
+  display: flex;
+  /* Label + value sit close with ONE capped gap — short identity values
+     ("Credentials: File", "Favorite model: …") read as a pair rather than being
+     flung to opposite panel edges by space-between. Numeric rows opt back into
+     edge alignment via .acct-meta-row-numeric below. */
+  justify-content: flex-start;
+  align-items: baseline;
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-base);
+  gap: var(--space-lg);
+}
+
+.acct-meta-k {
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.acct-meta-v {
+  color: var(--fg);
+  /* Long identity values (a model id, a path) still ellipsize within the row
+     rather than pushing it wider. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Numeric rows: push the figure to the right edge and align a column of them. */
+.acct-meta-row-numeric {
+  justify-content: space-between;
+}
+.acct-meta-row-numeric .acct-meta-v {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.acct-meta-v em { color: var(--fg-dim); font-style: normal; }
+
+/* Totals row inside a meta group — slightly heavier weight + a top
+   border so it reads as a summary line under the per-model rows. */
+.acct-meta-row-total {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-xs);
+  padding-top: var(--space-sm);
+  font-weight: 600;
+}
+
+/* Footnote rendered under a meta group — used by the cost disclaimer
+   to anchor the figure to its price-snapshot date. Smaller and dimmer
+   than meta rows so it doesn't compete with the data. */
+.acct-meta-foot {
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+}
+
+/* A <Segmented> inside a section body has its panel-edge inset zeroed by
+   `.section-body > .vsc-segmented` (components.css) — the section body already
+   applies that horizontal padding, so the control's own margin would inset it
+   twice and leave it narrower than the rows beside it. */
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Heatmap
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Heatmap scroll container. Cells are a fixed 16px square so the
+   grid is wider than a typical sidebar — wrap exposes a thin
+   horizontal scrollbar and bindHandlers scrolls to today on render
+   + resize so the right edge is always in view by default. */
+.acct-heatmap-wrap {
+  overflow-x: auto;
+  margin: var(--space-md) 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle, rgba(127,127,127,0.3)) transparent;
+  padding-bottom: var(--space-xs);
+}
+.acct-heatmap-wrap::-webkit-scrollbar { height: 6px; }
+.acct-heatmap-wrap::-webkit-scrollbar-track { background: transparent; }
+.acct-heatmap-wrap::-webkit-scrollbar-thumb {
+  background: var(--border-subtle, rgba(127,127,127,0.3));
+  border-radius: 3px;
+}
+.acct-heatmap-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--border, rgba(127,127,127,0.5));
+}
+
+/* Heatmap — grid with day labels on left and month labels on top.
+   Cells are a fixed 12px square so they stay readable regardless of
+   sidebar width. The wrap container scrolls horizontally (silently
+   — scrollbar is hidden) when the grid overflows; bindHandlers
+   scrolls to today on render + resize so the right edge is always
+   in view. */
+.acct-heatmap {
+  display: grid;
+  grid-template-rows: 14px repeat(7, 16px);
+  gap: 3px;
+  width: max-content;
+  padding-right: 4px;
+}
+
+.acct-heat-month {
+  font-size: 9px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  align-self: end;
+  padding-bottom: 2px;
+  /* Each label is anchored to a single ~12px column but the month
+     name is wider — force a single line so the text overflows the
+     column visibly to the right instead of wrapping into two lines
+     (the wrapped second line collapses to just the year suffix and
+     `align-self: end` would show only that, hiding the month). */
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.acct-heat-day {
+  font-size: 9px;
+  color: var(--fg-dim);
+  padding-right: var(--space-sm);
+  align-self: center;
+  line-height: 1;
+}
+
+.acct-heat-cell {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
+/* Single-hue ramp with monotonically increasing intensity. The previous
+   ramp mixed bg-hover@0.4 (lvl-0) with orange@0.2 (lvl-1), which on dark
+   themes made a no-activity day look brighter than a 1-message day.
+
+   Every step is the same hue at a different strength, so the hue is named
+   once (--color-amber) and each level mixes it. It used to be spelled out as
+   rgba(255,153,102,…) eight times across this block, with the top of the ramp
+   written as a bare #FF9966 — one hue, nine chances to mistype it. */
+.acct-heat-cell.lvl-0 { background: color-mix(in srgb, var(--color-amber) 8%, transparent); }
+.acct-heat-cell.lvl-1 { background: color-mix(in srgb, var(--color-amber) 30%, transparent); }
+.acct-heat-cell.lvl-2 { background: color-mix(in srgb, var(--color-amber) 55%, transparent); }
+.acct-heat-cell.lvl-3 { background: color-mix(in srgb, var(--color-amber) 80%, transparent); }
+.acct-heat-cell.lvl-4 { background: var(--color-amber); }
+/* State rules MUST come after lvl-* rules. Future/stale cells always
+   carry lvl-0 (no intensity), and equal-specificity selectors fall back
+   to source order — declared before .lvl-0, the state bg got overridden
+   and stale days were indistinguishable from idle days. */
+.acct-heat-cell.empty,
+.acct-heat-cell.state-future {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-subtle, rgba(127, 127, 127, 0.15));
+}
+/* "Stale" — past day not yet aggregated by Claude's stats-cache.json.
+   Diagonal hatch reads as "indeterminate, retry later" without
+   shouting an error colour. Matches the cache-lag note in the legend. */
+.acct-heat-cell.state-stale {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--color-amber) 10%, transparent) 0,
+      color-mix(in srgb, var(--color-amber) 10%, transparent) 2px,
+      transparent 2px,
+      transparent 4px
+    );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-amber) 20%, transparent);
+}
+/* Today: subtle ring on whatever level the cell already has. Uses the
+   same orange so it reads as part of the ramp, not a foreign accent. */
+.acct-heat-cell.state-today {
+  outline: 1.5px solid var(--color-amber);
+  outline-offset: 1px;
+  position: relative;
+  z-index: 1;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Stats grid — big numbers
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Settings form fields
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Permissions
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Empty states
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Subtle footnote (appears at bottom of sections)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+/*
+ * Helper text shown directly under an input/select. Used for the model
+ * dropdown to mirror Claude CLI's per-option description without forcing
+ * the dropdown options themselves to be multi-line.
+ */
+
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Quota section (current subscription utilization)
+   ──────────────────────────────────────────────────────────────────────────────
+
+   Three-state card: idle (prompt to fetch), loading (skeleton +
+   spinner), success (bars + timestamp), error (diagnostic + retry).
+   Uses semantic VS Code tokens everywhere so the palette matches
+   whatever theme the user is on — no hard-coded colours.
+*/
+
+.acct-quota-intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+}
+.acct-quota-intro-text {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.acct-quota-intro-text code {
+  font-family: var(--font-mono, monospace);
+  background: var(--bg-hover);
+  padding: 1px var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: 0.92em;
+  color: var(--fg);
+}
+.acct-quota-intro .btn {
+  align-self: flex-start;
+}
+
+/* Loading state — centered spinner + label, same height as the success
+   card so the layout doesn't jump when data arrives. */
+.acct-quota-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-lg);
+  min-height: 120px;
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+}
+.acct-quota-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--fg-dim);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: acct-quota-spin 0.8s linear infinite;
+}
+@keyframes acct-quota-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct-quota-spinner { animation: none; }
+}
+
+/* Bars stack — each row is label + bar + reset timer. Generous
+   vertical rhythm so the numbers remain scannable at a glance. */
+.acct-quota-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  /* Top only. The section body already pads its own bottom, and a bottom
+     padding here stacked on top of it, leaving a 16px gap under the last
+     line that read as a missing element rather than as breathing room. */
+  padding-top: var(--space-xs);
+}
+.acct-quota-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.acct-quota-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.acct-quota-label {
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  font-weight: 500;
+}
+.acct-quota-pct {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.acct-quota-sub {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+
+/* Countdown to the cap, opposite the reset timer. Tinted because it only
+   ever appears when the user is on course to run out — there is no calm
+   version of this line to tint by mistake. */
+.acct-quota-countdown {
+  color: var(--vscode-editorWarning-foreground, #d49a00);
+  white-space: nowrap;
+}
+
+/* The verdict in words, under the bar. Muted when the week holds, since
+   it is a confirmation rather than a call to act; tinted only when the
+   allowance falls short, which is the one case that asks the user to do
+   something differently. */
+.acct-quota-verdict {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+
+/* Marks that a longer reading exists. Always muted, even next to a tinted
+   verdict: the affordance is the same either way, and colouring it would
+   read as a second warning. */
+.acct-quota-info {
+  display: inline-flex;
+  color: var(--fg-dim);
+  cursor: help;
+}
+.acct-quota-info:hover,
+.acct-quota-info:focus-visible {
+  color: var(--fg);
+}
+.acct-quota-verdict.pace-ahead {
+  color: var(--vscode-editorWarning-foreground, #d49a00);
+}
+
+/* Prompt-cache effectiveness — a text row, not a bar. The rate-limit
+   bars above answer "how much is left"; this answers "why is it going
+   down", so it deliberately reads as a footnote to them rather than
+   competing for the same visual weight. Separated by a hairline so it
+   is legible as a different kind of fact. */
+/* `.acct-quota-branch` (repo / worktree / PR) is the same kind of fact in
+   the same register, so it shares the footnote box rather than restating
+   it — one declaration, two owners. Only what genuinely differs is
+   declared separately below. */
+.acct-quota-cache,
+.acct-quota-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+}
+.acct-quota-cache-head,
+.acct-quota-branch-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+/* Footnote weight, not row weight. At --fs-sm/500/--fg this matched the
+   quota labels exactly and read as a fourth window missing its bar. */
+.acct-quota-cache-label,
+.acct-quota-branch-label {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+/* Sits next to its label rather than pushed to the right-hand slot the
+   quota percentages occupy, because the same position with the opposite
+   polarity (98% here is good, 98% there is nearly blocked) is exactly
+   what made the row misread. */
+.acct-quota-cache-value,
+.acct-quota-branch-value {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.acct-quota-cache-head .acct-quota-info {
+  margin-inline-start: auto;
+}
+.acct-quota-cache-detail,
+.acct-quota-branch-note {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+
+/* The PR/MR link. A ghost <Button> so the affordance, hover and focus ring
+   come from the shared control rather than from a private link rule; this
+   only sheds the control-height geometry, which would tower over an
+   --fs-xs footnote line. */
+.acct-quota-pr {
+  height: auto;
+  padding: 0 var(--space-xs);
+  font-size: var(--fs-xs);
+  color: var(--link);
+}
+.acct-quota-pr .icon {
+  width: 11px;
+  height: 11px;
+}
+
+/* Progress bar — rounded track with an absolute fill. 200ms ease-out
+   so a refresh animates in rather than snapping, which reinforces the
+   "something changed" moment without feeling slow. */
+.acct-quota-bar {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.acct-quota-bar-fill {
+  position: relative; /* paint above the projection ghost, which is
+                         absolutely positioned and would otherwise win */
+  z-index: 1;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 240ms ease-out, background-color 200ms ease-out;
+  min-width: 2px; /* keep a tiny sliver visible at 0% so the track
+                     doesn't read as "no data" */
+}
+
+/* Where this window lands by reset if the current burn rate holds. Sits
+   under the real fill and extends past it, so the gap between the two is
+   what the week still has to spend. Reaching the far end IS the overshoot
+   — the bar has no room past the cap, and running out looks exactly like
+   a ghost that fills the track. */
+.acct-quota-bar-ghost {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  transition: width 240ms ease-out;
+  background: color-mix(in srgb, var(--fg-dim) 32%, transparent);
+}
+.acct-quota-bar-ghost.pace-ahead {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #d49a00) 42%,
+    transparent
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct-quota-bar-fill,
+  .acct-quota-bar-ghost { transition: none; }
+}
+
+/* Threshold tones — green → amber → red, from the semantic palette in
+   tokens.css, which carries a light-theme half. These used to borrow
+   `testing.iconPassed` (the Test Explorer's pass glyph) behind three
+   different hardcoded greens. */
+.acct-quota-bar-fill.tone-low {
+  background: var(--green);
+}
+.acct-quota-bar-fill.tone-mid {
+  background: var(--vscode-editorWarning-foreground, #d49a00);
+}
+.acct-quota-bar-fill.tone-high {
+  background: var(--vscode-editorError-foreground, #e04d4d);
+}
+
+.acct-quota-extra {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--border);
+}
+
+/* Footer — "Fetched Xm ago" stamp on the left, Refresh button on the
+   right. Button is subtle (no primary styling) because the primary
+   action moment is done; re-fetching is secondary. */
+/*
+ * "Fetched Xm ago" stamp inline in the section header, immediately
+ * before the refresh button. Xs size + muted fg so it reads as
+ * metadata. No icon — keeps the header lean.
+ */
+/* Quota freshness cluster — sits in the section header, just before the
+   Refresh button: a quiet "Updated <age>" stamp with the status dot on its
+   right, grouped so they read as one unit. Spacing is owned by the group's
+   own gap (and the header's gap to the button), so no per-item margins that
+   would double up and look uneven. */
+.acct-quota-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+.acct-quota-freshness-inline {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+/* Static dot — no pulse. The animation read as a distracting blink; a solid
+   dot communicates "live" just as well, and the muted variant signals idle.
+   Slightly inset from the baseline so it optically centres with the text. */
+.acct-quota-live-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.acct-quota-live-dot.is-stale {
+  background: var(--fg-dim);
+}
+
+/* Error state — icon + title + message + retry, laid out in a row so
+   it's compact. Colour lives on the icon (via --vscode-editorError)
+   so the whole block doesn't scream — the goal is "try this again",
+   not panic. */
+.acct-quota-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--vscode-editorError-foreground, #e04d4d);
+  border-radius: var(--radius);
+}
+.acct-quota-error-icon {
+  flex-shrink: 0;
+  color: var(--vscode-editorError-foreground, #e04d4d);
+  margin-top: 2px;
+}
+.acct-quota-error-body {
+  flex: 1;
+  min-width: 0;
+}
+.acct-quota-error-title {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg);
+  margin-bottom: 2px;
+}
+.acct-quota-error-msg {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.acct-quota-error .btn {
+  flex-shrink: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Breakdown lists — projects, tools, MCP servers
+   ──────────────────────────────────────────────────────────────────────────────
+   Shared structure for the three usage breakdowns surfaced beneath
+   the byModel table. Each is a stack of compact rows: a left-aligned
+   label that truncates, and right-aligned tabular metadata. The
+   `.acct-breakdown` modifier on `.cfg-perm-group` only adjusts the
+   inner rows — the group label inherits the existing styling so the
+   visual hierarchy stays consistent across the section. */
+
+.acct-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.acct-breakdown-label {
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.acct-breakdown-meta {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  flex-shrink: 0;
+}
+
+/* Tool bars — one row per tool. Label on the left, normalised bar in
+   the middle, count on the right. Bar uses --vscode-charts-blue as a
+   neutral accent so it picks up the user's theme without us hardcoding
+   a colour. */
+.acct-toolbar {
+  display: grid;
+  grid-template-columns: minmax(80px, 1.4fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  margin-bottom: 0;
+}
+.acct-toolbar-label {
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-toolbar-track {
+  display: block;
+  height: 6px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+.acct-toolbar-fill {
+  display: block;
+  height: 100%;
+  background: var(--vscode-charts-blue, var(--vscode-textLink-foreground, #4a90e2));
+  border-radius: 3px;
+  transition: width 200ms ease-out;
+}
+.acct-toolbar-count {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  min-width: 36px;
+  text-align: right;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Preact migration helpers (v2)
+   ──────────────────────────────────────────────────────────────────────────────
+   Classes introduced when porting the account tab from vanilla DOM to
+   Preact. They replace the handful of inline `style="margin-top:…"` /
+   wrapper markup the v1 string-templates used, so the TSX components
+   stay free of inline styling (dynamic geometry — heatmap grid coords,
+   progress-bar widths — remains inline because it is data-driven and
+   has no static class equivalent). */
+
+/* Top-margin separator between consecutive breakdown groups in the
+   Usage section (By model · Projects · Tools · MCP). v1 set this via an
+   inline style on each group. */
+.acct-group-spaced {
+  margin-top: var(--space-lg);
+}
+
+/* Wrapper around the signed-in profile body. v1 emitted these children
+   directly inside `.section-body`; the Preact component groups
+   them under one element so the banner + profile + meta + actions stack
+   reads as a single block. No box of its own — purely structural. */
+.acct-profile-wrap {
+  display: contents;
+}
+
+/* ── Usage redesign: section dividers + ribbon + blocks ─────────────── */
+
+.acct-divider {
+  border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.2));
+  margin: var(--space-lg) 0;
+}
+
+/* Single-line ribbon replacing the old five MetaRow lines under the
+   stat tiles. Wraps onto a second line on narrow panels. */
+.acct-info-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+  padding: var(--space-sm) 0;
+  font-size: var(--fs-sm);
+  color: var(--vscode-descriptionForeground);
+}
+.acct-ribbon-item { white-space: nowrap; }
+.acct-ribbon-item:not(:last-child)::after {
+  content: "·";
+  margin-left: var(--space-md);
+  opacity: 0.5;
+}
+
+/* Each below-heatmap chunk lives in its own block with a small subhead
+   so the eye can group related rows. */
+.acct-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.section-subhead {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-xs);
+}
+
+/* Cost headline = "the money story" on one line. Total prominent, the
+   prices-effective date tucked underneath in muted text. */
+.acct-cost-headline {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0 var(--space-sm);
+}
+.acct-cost-label {
+  font-size: var(--fs-sm);
+  color: var(--vscode-descriptionForeground);
+}
+.acct-cost-amount {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Proportion bar above the legend. Full width, because a share is easier to
+   compare by length than by angle and the legend below already carries every
+   figure — see ShareBar for why this replaced an 88px donut. */
+.acct-share-bar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-hover);
+  margin-bottom: var(--space-md);
+}
+.acct-share-seg {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.acct-model-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.acct-model-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--fs-sm);
+}
+.acct-model-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.acct-model-name {
+  color: var(--vscode-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-model-share,
+.acct-model-cost {
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 3.5em;
+}
+
+/* Per-row secondary number under .acct-toolbar (e.g. project sessions). */
+.acct-toolbar-sub {
+  font-size: var(--fs-xs);
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--space-xs);
+  min-width: 4em;
+  text-align: right;
+}
+
+/* "Show N more" / "Show less" inline expander. Subtle, button-as-link. */
+
+/* "Share stats" export row — right-aligned under the stat tiles so the
+   export affordance sits with the numbers it captures. */
+/* Collapsible breakdown blocks (Cost & models / Projects / Tools / MCP).
+   The Usage section is a long column; without a way to fold a block the
+   only route to the one you want is scrolling past the others. The
+   heading is the control, so it gets the button affordances. */
+.acct-block-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.acct-block-head:hover .section-subhead {
+  color: var(--fg);
+}
+/* The subhead carries a bottom margin from its standalone use, where it
+   sat above the block's content. Inside this flex row that margin is
+   both doubled (the block already has a `gap`) and off-centre: it
+   pushed the label up while the chevron stayed centred, so the two never
+   lined up. `.section-title` zeroes its own margin for exactly this
+   reason in the section header. */
+.acct-block-head .section-subhead {
+  margin: 0;
+}
+.acct-block-chevron {
+  /* flex + align-items, matching .section-chevron — an inline-flex
+     box without it sits on the text baseline rather than the row's
+     centre, which is the other half of the misalignment. */
+  display: flex;
+  align-items: center;
+  color: var(--fg-dim);
+  transition: transform 150ms ease;
+}
+.acct-block-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+/* A count beside the heading so a folded block still says what is in it. */
+.acct-block-count {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct-block-chevron {
+    transition: none;
+  }
+}
+
+/* MCP rows: name + two pill badges. */
+.acct-mcp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-sm);
+}
+.acct-mcp-name {
+  flex: 1;
+  color: var(--vscode-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--vscode-badge-background, rgba(127, 127, 127, 0.15));
+  color: var(--vscode-badge-foreground, var(--vscode-descriptionForeground));
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Plain ranked text row — name (ellipsis on overflow) + primary number
+   (right-aligned tabular) + optional muted sub. No bar, less clutter,
+   names get the room they need. Full path/name in row title. */
+.acct-data-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-md);
+  align-items: baseline;
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+.acct-data-name {
+  color: var(--vscode-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.acct-data-num {
+  color: var(--vscode-foreground);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.acct-data-sub {
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: var(--fs-xs);
+  min-width: 5em;
+}
+

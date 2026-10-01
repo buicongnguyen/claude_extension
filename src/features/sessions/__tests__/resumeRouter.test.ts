@@ -1,0 +1,473 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as vscode from "vscode";
+
+// Stub config paths so importing commands doesn't reach into real dirs.
+vi.mock("../../../core/config", () => ({
+  CLAUDE_DIR: "/tmp/irrelevant",
+  HISTORY_FILE: "/tmp/irrelevant/history.jsonl",
+  PROJECTS_DIR: "/tmp/irrelevant/projects",
+  SESSIONS_DIR: "/tmp/irrelevant/sessions",
+  STATE_FILE: "/tmp/irrelevant/.state.json",
+  SESSION_META_READ_BYTES: 4096,
+}));
+
+/**
+ * Capture sendText calls so tests can assert "terminal path was taken".
+ * The createTerminal mock returns a handle whose sendText appends to
+ * this array; a fresh array is rebuilt in beforeEach.
+ */
+let sentText: string[] = [];
+/** Terminal tab names passed to createTerminal, in call order. */
+let termNames: string[] = [];
+vi.mock("../../../extension/terminal", () => ({
+  createTerminal: (name: string) => {
+    termNames.push(name);
+    return {
+      show: () => {},
+      sendText: (t: string) => {
+        sentText.push(t);
+      },
+    };
+  },
+  runInTerminal: (term: { sendText: (t: string) => void }, cmd: string) => term.sendText(cmd),
+  validateGitRef: (name: string) => (/^[A-Za-z0-9._/-]+$/.test(name) ? name : null),
+}));
+
+// Worktree resolution spawns git; every routing test here is a plain
+// main-checkout session, so stub it to report "no worktree". The dedicated
+// worktree-aware branches are covered in resumeWorktree.test.ts.
+vi.mock("../../../extension/worktrees", () => ({
+  resolveWorktree: vi.fn(() => null),
+  findWorktreeForBranch: vi.fn(() => null),
+  clearWorktreeCache: vi.fn(),
+}));
+
+// Import under test AFTER mocks.
+import { resumeSession, resumeAfterAccountSwitch, continueStoppedTask } from "../commands";
+import type { Session } from "../types";
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: "sess-1",
+    name: "",
+    project: "claude-manager",
+    projectPath: "/work/claude-manager",
+    branch: "main",
+    entrypoint: "cli",
+    startTime: 1700000000000,
+    endTime: 1700000010000,
+    messageCount: 1,
+    summary: "",
+    prompts: [],
+    projectKey: "claude-manager",
+    searchHaystack: "",
+    ...overrides,
+  };
+}
+
+/** Pretend the workspace IS the session's project so no cross-window jump. */
+function mockSameWorkspace(sess: Session): void {
+  (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = [
+    { uri: { fsPath: sess.projectPath }, name: sess.project, index: 0 },
+  ];
+}
+
+/** Pretend the workspace matches git branch too, so no branch warning. */
+function mockBranch(branch: string): void {
+  // getCurrentBranch uses vscode.extensions.getExtension("vscode.git").
+  // Stub it to return a repo with the requested branch.
+  vi.spyOn(vscode.extensions, "getExtension").mockImplementation((id: string) => {
+    if (id === "vscode.git") {
+      return {
+        isActive: true,
+        exports: {
+          getAPI: () => ({
+            repositories: [{ state: { HEAD: { name: branch } } }],
+          }),
+        },
+      } as never;
+    }
+    if (id === "anthropic.claude-code") {
+      return extensionPresent
+        ? ({ isActive: true } as never)
+        : (undefined as never);
+    }
+    return undefined as never;
+  });
+}
+
+let extensionPresent = false;
+
+/**
+ * Mock a specific config value. Returns the spy so the caller can
+ * restore it; vi.restoreAllMocks() in beforeEach wipes all spies.
+ */
+function mockResumeIn(value: string): void {
+  vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+    get: (_key: string, defaultValue?: unknown) => {
+      if (_key === "resumeIn") return value;
+      return defaultValue;
+    },
+  } as never);
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  sentText = [];
+  termNames = [];
+  extensionPresent = false;
+});
+
+describe("resumeSession routing", () => {
+  it("auto + entrypoint=cli → terminal", async () => {
+    const sess = makeSession({ entrypoint: "cli" });
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("auto");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.some((t) => t.includes(`claude --resume ${sess.id}`))).toBe(true);
+  });
+
+  it("auto + entrypoint=vscode + extension installed → extension URI", async () => {
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("auto");
+    const openSpy = vi
+      .spyOn(vscode.env, "openExternal")
+      .mockResolvedValue(true as never);
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    const uri = openSpy.mock.calls[0][0] as { toString: () => string };
+    expect(uri.toString()).toContain(`session=${sess.id}`);
+    expect(sentText).toEqual([]);
+  });
+
+  it("auto + entrypoint=vscode but extension missing → terminal", async () => {
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = false;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("auto");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
+  it("terminal mode → always terminal, ignoring entrypoint", async () => {
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("terminal");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
+  it("extension mode + installed → URI", async () => {
+    const sess = makeSession({ entrypoint: "cli" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("extension");
+    const openSpy = vi
+      .spyOn(vscode.env, "openExternal")
+      .mockResolvedValue(true as never);
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(sentText).toEqual([]);
+  });
+
+  it("extension mode but not installed → silent fallback to terminal", async () => {
+    const sess = makeSession({ entrypoint: "cli" });
+    extensionPresent = false;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("extension");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
+  it("fork is always terminal even when extension is installed", async () => {
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("extension");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, true /* fork */, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.some((t) => t.includes("--fork-session"))).toBe(true);
+  });
+
+  it("forceTerminal overrides extension mode (multi-session restore)", async () => {
+    // Restore Workspace resumes N sessions; the extension chat tab is
+    // single-instance, so it must force terminals or only the last survives.
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("extension");
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess], true /* forceTerminal */);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.some((t) => t.includes(`claude --resume ${sess.id}`))).toBe(true);
+  });
+
+  it("ask mode + user picks Extension → URI", async () => {
+    const sess = makeSession({ entrypoint: "cli" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("ask");
+    vi.spyOn(vscode.window, "showQuickPick").mockResolvedValue({
+      label: "Extension chat",
+    } as never);
+    const openSpy = vi
+      .spyOn(vscode.env, "openExternal")
+      .mockResolvedValue(true as never);
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(sentText).toEqual([]);
+  });
+
+  it("ask mode + user picks Terminal → terminal", async () => {
+    const sess = makeSession({ entrypoint: "vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("ask");
+    vi.spyOn(vscode.window, "showQuickPick").mockResolvedValue({
+      label: "Terminal",
+    } as never);
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
+  it("different project + extension mode → opens project, then fires URI after delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const sess = makeSession({
+        entrypoint: "cli",
+        projectPath: "/some/other/proj",
+      });
+      extensionPresent = true;
+      // Workspace is the *current* project, session is in a *different* one.
+      (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = [
+        { uri: { fsPath: "/work/claude-manager" }, name: "cm", index: 0 },
+      ];
+      mockBranch("main");
+      mockResumeIn("extension");
+      const openProjectSpy = vi
+        .spyOn(vscode.commands, "executeCommand")
+        .mockResolvedValue(undefined as never);
+      const openSpy = vi
+        .spyOn(vscode.env, "openExternal")
+        .mockResolvedValue(true as never);
+
+      await resumeSession(sess.id, false, [sess]);
+
+      // Project opens synchronously; URI is deferred.
+      expect(openProjectSpy).toHaveBeenCalled();
+      expect(openSpy).not.toHaveBeenCalled();
+
+      // Advance past the 3 s delay we use to let the new window
+      // finish activating before routing the URI.
+      vi.advanceTimersByTime(3100);
+      await vi.runAllTimersAsync();
+
+      expect(openSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ask mode + cancelled → neither target fires (clean bail-out)", async () => {
+    const sess = makeSession({ entrypoint: "cli" });
+    extensionPresent = true;
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("ask");
+    vi.spyOn(vscode.window, "showQuickPick").mockResolvedValue(undefined as never);
+    const openSpy = vi.spyOn(vscode.env, "openExternal");
+
+    await resumeSession(sess.id, false, [sess]);
+
+    // Cancelling the QuickPick is a deliberate no-op — the user
+    // backed out, so neither destination should be launched.
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(sentText).toEqual([]);
+  });
+});
+
+describe("terminal tab name", () => {
+  async function resumeInTerminal(sess: Session): Promise<void> {
+    mockSameWorkspace(sess);
+    mockBranch("main");
+    mockResumeIn("terminal");
+    await resumeSession(sess.id, false, [sess]);
+  }
+
+  it("uses the session name", async () => {
+    await resumeInTerminal(makeSession({ name: "fix auth bug" }));
+    expect(termNames).toEqual(["fix auth bug"]);
+  });
+
+  // An unnamed session used to yield "" here, and VS Code treats an empty
+  // name as no name at all — the tab fell back to the process name.
+  it("falls back to the short id when the session has no name", async () => {
+    await resumeInTerminal(makeSession({ id: "d78995d6-b8ff-e0d5-0f00-000000000000", name: "" }));
+    expect(termNames).toEqual(["d78995d6"]);
+  });
+
+  it("truncates a long name to fit the tab", async () => {
+    await resumeInTerminal(makeSession({ name: "a".repeat(40) }));
+    expect(termNames[0]).toBe(`${"a".repeat(23)}…`);
+  });
+});
+
+describe("resume handoff failures", () => {
+  it("offers terminal recovery when the chat handoff returns false", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("auto");
+    vi.spyOn(vscode.env, "openExternal").mockResolvedValue(false);
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Resume in terminal" as never);
+    await resumeSession(sess.id, false, [sess]);
+    expect(warning).toHaveBeenCalled();
+    expect(sentText).toEqual(["claude --resume sess-1"]);
+  });
+  it("explains a rejected chat handoff and respects cancellation", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode" });
+    extensionPresent = true;
+    mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("auto");
+    vi.spyOn(vscode.env, "openExternal").mockRejectedValue(new Error("dispatch failed"));
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    await expect(resumeSession(sess.id, false, [sess])).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalled();
+    expect(sentText).toEqual([]);
+  });
+});
+
+describe("usage-limit recovery with a fresh client", () => {
+  it("requires acknowledgement that the old client was closed", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode", isLive: true });
+    mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("extension");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    const opened = vi.spyOn(vscode.env, "openExternal");
+    await resumeAfterAccountSwitch(sess.id, [sess]);
+    expect(warning).toHaveBeenCalledWith("Resume with a fresh Claude client?", expect.objectContaining({ modal: true }), "Old session closed — resume");
+    expect(sentText).toEqual([]);
+    expect(opened).not.toHaveBeenCalled();
+  });
+  it("reopens exactly the same history in a new terminal after confirmation", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode", isLive: true });
+    extensionPresent = true;
+    mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("extension");
+    vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Old session closed — resume" as never);
+    const opened = vi.spyOn(vscode.env, "openExternal");
+    await resumeAfterAccountSwitch(sess.id, [sess]);
+    expect(sentText).toEqual(["claude --resume sess-1"]);
+    expect(opened).not.toHaveBeenCalled();
+  });
+  it("does not launch an unknown session or use a shell-injected id", async () => {
+    const error = vi.spyOn(vscode.window, "showErrorMessage");
+    await resumeAfterAccountSwitch("missing", []);
+    await resumeSession("id; echo bad", false, []);
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(sentText).toEqual([]);
+  });
+  it("requires opening the correct project before fresh recovery", async () => {
+    const sess = makeSession();
+    mockSameWorkspace(makeSession({ projectPath: "/another/project" }));
+    const warning = vi.spyOn(vscode.window, "showWarningMessage");
+    const info = vi.spyOn(vscode.window, "showInformationMessage");
+    await resumeAfterAccountSwitch(sess.id, [sess]);
+    expect(info).toHaveBeenCalled(); expect(warning).not.toHaveBeenCalled();
+    expect(sentText).toEqual([]);
+  });
+});
+
+it("coalesces repeated fresh Resume clicks while confirmation is pending", async () => {
+  const sess = makeSession(); mockSameWorkspace(sess); mockBranch("main");
+  let approve!: (choice: any) => void;
+  const warning = vi.spyOn(vscode.window, "showWarningMessage").mockImplementation(() => new Promise((resolve) => { approve = resolve; }) as never);
+  const first = resumeAfterAccountSwitch(sess.id, [sess]);
+  await resumeAfterAccountSwitch(sess.id, [sess]);
+  expect(warning).toHaveBeenCalledOnce();
+  approve("Old session closed — resume"); await first;
+  expect(sentText).toEqual(["claude --resume sess-1"]);
+});
+
+it("submits a continuation at CLI launch instead of only reopening the history", async () => {
+  const sess = makeSession({ entrypoint: "claude-vscode" });
+  extensionPresent = true; mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("extension");
+  const chat = vi.spyOn(vscode.env, "openExternal");
+  await resumeSession(sess.id, false, [sess], true, true);
+  expect(sentText).toEqual(['claude --resume sess-1 "Continue the interrupted task from where you stopped. Check existing progress before repeating any actions."']);
+  expect(chat).not.toHaveBeenCalled();
+});
+
+describe("continuation after the same account's usage resets", () => {
+  it("submits a continuation for the same history after the old client is closed", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode", isLive: true });
+    extensionPresent = true; mockSameWorkspace(sess); mockBranch("main"); mockResumeIn("extension");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Old session closed — continue" as never);
+    const chat = vi.spyOn(vscode.env, "openExternal");
+    await continueStoppedTask(sess.id, [sess]);
+    expect(warning).toHaveBeenCalledWith("Continue this stopped task?", expect.objectContaining({ modal: true }), "Old session closed — continue");
+    expect(sentText).toEqual(['claude --resume sess-1 "Continue the interrupted task from where you stopped. Check existing progress before repeating any actions."']);
+    expect(chat).not.toHaveBeenCalled();
+  });
+  it("does not submit anything when the old chat should stay open", async () => {
+    const sess = makeSession({ entrypoint: "claude-vscode", isLive: true });
+    mockSameWorkspace(sess); mockBranch("main");
+    vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    await continueStoppedTask(sess.id, [sess]); expect(sentText).toEqual([]);
+  });
+  it("rejects missing sessions and requires opening the correct project", async () => {
+    const error = vi.spyOn(vscode.window, "showErrorMessage");
+    await continueStoppedTask("missing", []); expect(error).toHaveBeenCalled();
+    const sess = makeSession(); mockSameWorkspace(makeSession({ projectPath: "/other" }));
+    const info = vi.spyOn(vscode.window, "showInformationMessage");
+    await continueStoppedTask(sess.id, [sess]); expect(info).toHaveBeenCalled(); expect(sentText).toEqual([]);
+  });
+  it("coalesces repeated Continue clicks while confirmation is pending", async () => {
+    const sess = makeSession(); mockSameWorkspace(sess); mockBranch("main");
+    let answer!: (choice: any) => void;
+    const warning = vi.spyOn(vscode.window, "showWarningMessage").mockImplementation(() => new Promise(resolve => { answer = resolve; }) as never);
+    const first = continueStoppedTask(sess.id, [sess]);
+    await continueStoppedTask(sess.id, [sess]); expect(warning).toHaveBeenCalledOnce();
+    answer("Old session closed — continue"); await first; expect(sentText).toHaveLength(1);
+  });
+});

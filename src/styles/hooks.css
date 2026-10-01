@@ -1,0 +1,114 @@
+/* ============================================================================
+   Claude Manager — Hooks feature styles.
+
+   Search (SearchInput), scope pills (ScopeFilter), badges (Badge), and buttons
+   (Button) are shared components — their chrome lives in components.css /
+   components-native.css, not here. This file owns only the hooks-unique
+   layout that has no shared equivalent:
+     - the hooks detail layout (scoped under .hooks-panel so it does not
+       depend on sessions.css load order)
+     - the link-style Back button override of the shared .btn base
+     - the inline edit-form fields (the multi-line command <textarea>)
+     - grouping + virtual-list wrappers
+   ============================================================================ */
+
+
+/* Event grouping wrapper for the non-virtualized list. */
+.hook-group {
+  display: block;
+}
+
+/* Windowed list wrapper — fills the panel below the search + filter rows. */
+.hook-virtual-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ── Detail view (scoped to hooks so it owns its own layout) ── */
+
+/* Back uses the shared <BackButton>; no per-feature override — one style
+   across all detail views. */
+
+.hooks-panel .d-head {
+  padding: 0 var(--space-2xl) var(--space-md);
+}
+
+.hooks-panel .d-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Flex-wrap content-width buttons (not an auto-fit grid): a grid stretches
+   each button to its 1fr track and long labels ("Open settings file",
+   "Open /hooks") spill out and overlap. Matches agents/mcp/commands. */
+.hooks-panel .d-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding: 0 var(--space-2xl) var(--space-lg);
+}
+.hooks-panel .d-actions > .btn {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+/* Plugin read-only note spans the full row instead of sitting in a button slot. */
+.hooks-panel .d-actions > .hook-readonly-note {
+  flex: 1 1 100%;
+}
+
+/* .d-scroll, .d-section, and .d-label use the shared rules (sessions.css). The
+   sections own their padding + border-top dividers — matching every other
+   detail view. A former `.hooks-panel .d-scroll` here layered a SECOND
+   padding + border-top on top of the sections' own, which double-bordered the
+   divider under the actions and doubled the horizontal inset + bottom padding.
+   Only the key/value layout below is hooks-specific (justified, not 55px-key). */
+
+.hooks-panel .d-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-md);
+}
+
+.hooks-panel .d-k {
+  color: var(--fg-dim);
+}
+
+.hooks-panel .d-v {
+  color: var(--fg);
+  text-align: right;
+  word-break: break-word;
+}
+.hooks-panel .d-v.mono {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+/* ── Inline edit form ── */
+
+.hook-field {
+  margin-bottom: var(--space-lg);
+}
+
+/* Match the agent/mcp form label treatment (section colour, weight 600) so
+   the three "create/edit" surfaces read consistently. */
+.hook-field-label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-section);
+  margin-bottom: var(--space-xs);
+}
+.hook-field-hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  margin-top: var(--space-xs);
+}
+.hook-field-hint-error {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+}

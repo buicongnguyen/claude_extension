@@ -1,0 +1,89 @@
+/**
+ * A single MCP server row in the list view. Shows the server name, a copy
+ * button, transport/scope/disabled badges, and a one-line connection preview.
+ * Selection and copy are surfaced as callbacks so the row stays presentational.
+ */
+import { cx } from "../../../../../webview/shared/lib";
+import { Button, ListItem } from "../../../../../webview/shared/ui";
+import { canToggleMcp, connectionPreview } from "../../lib";
+import type { McpServer } from "../../../types";
+import { DisabledBadge, ReadOnlyBadge, TypeBadge } from "../McpBadges";
+
+export interface McpItemProps {
+  server: McpServer;
+  active: boolean;
+  onSelect: (server: McpServer) => void;
+  onCopyName: (name: string) => void;
+  /** Right-click the row for the server's actions. */
+  onContextMenu?: (server: McpServer, x: number, y: number) => void;
+  /** Switch a project server on or off without opening it. */
+  onToggle?: (server: McpServer) => void;
+}
+
+export function McpItem({
+  server,
+  active,
+  onSelect,
+  onCopyName,
+  onContextMenu,
+  onToggle,
+}: McpItemProps) {
+  // Full connection string: the row ellipsizes it in CSS at whatever width
+  // the sidebar happens to be, and the title reveals the rest on hover.
+  const preview = connectionPreview(server);
+  return (
+    <ListItem
+      active={active}
+      class={cx("mcp-item", server.disabled && "mcp-disabled")}
+      onClick={() => onSelect(server)}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              // Replace VS Code's own webview menu with the server's actions.
+              e.preventDefault();
+              onContextMenu(server, e.clientX, e.clientY);
+            }
+          : undefined
+      }
+    >
+      <div class="mcp-item-row1">
+        <span class="mcp-item-name">{server.name}</span>
+        <Button
+          variant="icon"
+          iconName="copy"
+          class="item-copy-btn"
+          title="Copy name"
+          ariaLabel="Copy name"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopyName(server.name);
+          }}
+        />
+        {onToggle && canToggleMcp(server) ? (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!server.disabled}
+            class="mcp-switch"
+            title={server.disabled ? `Enable ${server.name}` : `Disable ${server.name}`}
+            aria-label={server.disabled ? `Enable ${server.name}` : `Disable ${server.name}`}
+            onClick={(e) => {
+              // The row itself opens the detail view.
+              e.stopPropagation();
+              onToggle(server);
+            }}
+          >
+            <span class="mcp-switch-knob" />
+          </button>
+        ) : server.disabled ? (
+          <DisabledBadge />
+        ) : null}
+        <TypeBadge type={server.type} />
+        {server.scope === "plugin" ? <ReadOnlyBadge pluginName={server.pluginName} /> : null}
+      </div>
+      <div class="mcp-item-detail" title={preview}>
+        {preview}
+      </div>
+    </ListItem>
+  );
+}

@@ -1,0 +1,427 @@
+export type SettingsScope = "global" | "project" | "local";
+export type PermissionList = "allow" | "deny";
+export type DetailMode = "first" | "last";
+
+/** Payload for creating/editing an MCP server from the webview form. */
+export interface McpServerInput {
+  name: string;
+  /** "global" | "project" — the two writable scopes. */
+  scope: string;
+  /** "stdio" | "http" | "sse" | "ws" */
+  transport: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+/** Payload for creating/editing an agent from the webview form. */
+export interface AgentInput {
+  /** "global" | "project" — used on create to pick the target dir. */
+  scope: string;
+  name: string;
+  description: string;
+  /** Model id or "inherit". */
+  model: string;
+  tools: string[];
+  skills: string[];
+  /** System-prompt markdown body (no frontmatter). */
+  body: string;
+}
+
+export type Message =
+  | { type: "ready" }
+  | { type: "markDemoSeen" }
+  | { type: "refresh" }
+  | { type: "newSession" }
+  | { type: "newTempSession" }
+  | { type: "promoteTempSession"; sessionId: string }
+  | { type: "continueLastSession" }
+  | {
+      type: "resumeSession";
+      sessionId: string;
+      entrypoint?: string;
+      projectPath?: string;
+      fresh?: boolean;
+      continueTask?: boolean;
+    }
+  | { type: "resumeMultiple"; sessionIds: string[]; projectPaths?: string[] }
+  | { type: "getSessionDetail"; sessionId: string; mode?: DetailMode; query?: string }
+  | { type: "pinSession"; sessionId: string }
+  | { type: "unpinSession"; sessionId: string }
+  | { type: "getPromptHistory" }
+  | { type: "copyPrompt"; text: string }
+  | { type: "openPromptSession"; sessionId: string }
+  | { type: "getPlugins" }
+  | { type: "openPluginDirectory"; id: string }
+  | { type: "openPluginSettings"; scope: "global" | "project" | "local" | "managed" }
+  | { type: "copyPluginId"; id: string }
+  | {
+      type: "setPluginEnabled";
+      id: string;
+      enabled: boolean;
+      scope: "global" | "project" | "local" | "managed";
+    }
+  | { type: "getMemories" }
+  | { type: "openMemory"; project: string; fileName: string }
+  | { type: "revealMemory"; project: string; fileName: string }
+  | { type: "deleteMemory"; project: string; fileName: string }
+  | { type: "archiveSession"; sessionId: string }
+  | { type: "unarchiveSession"; sessionId: string }
+  | { type: "archiveSessions"; sessionIds: string[] }
+  | { type: "confirmDelete"; sessionId: string; callback?: string }
+  | { type: "renameSession"; sessionId: string }
+  | { type: "forkSession"; sessionId: string }
+  | { type: "copyCommand"; sessionId: string }
+  | { type: "openProject"; projectPath: string }
+  | { type: "openUrl"; url: string }
+  | { type: "exportSession"; sessionId: string }
+  | { type: "importSession" }
+  | { type: "searchFullText"; query: string }
+  | { type: "launchChatWithPrompt"; prompt: string }
+  | { type: "openProjectAndChat"; projectPath: string }
+  | { type: "reloadAll" }
+  | { type: "bulkPinSessions"; ids: string[]; pin: boolean }
+  | { type: "bulkDeleteSessions"; ids: string[] }
+  | { type: "bulkExportSessions"; ids: string[] }
+  | { type: "importMultipleSessions" }
+  | { type: "getSkills" }
+  | { type: "getSkillDetail"; skillId: string }
+  | { type: "openSkillFile"; skillPath: string }
+  | { type: "deleteSkill"; skillPath: string }
+  | { type: "getCommands" }
+  | { type: "openCommandFile"; path: string }
+  | { type: "getHooks" }
+  | { type: "openSettingsFile"; scope: SettingsScope }
+  | { type: "toggleHookEnabled"; hook: unknown }
+  | { type: "deleteHook"; hook: unknown }
+  | {
+      type: "updateHook";
+      original: unknown;
+      next: {
+        matcher: string;
+        command: string;
+        event?: string;
+        scope?: SettingsScope;
+        timeout?: number;
+      };
+    }
+  | { type: "promptAddHook" }
+  | { type: "openHooksPanel" }
+  | { type: "getMcpServers" }
+  | { type: "openMcpConfig"; scope: string; name?: string }
+  | { type: "toggleMcpServer"; name: string; scope: string; disabled: boolean; pluginName?: string }
+  | { type: "deleteMcpServer"; name: string; scope: string }
+  | { type: "addMcpServer"; server: McpServerInput }
+  | { type: "updateMcpServer"; originalName: string; server: McpServerInput }
+  | { type: "authenticateMcp"; name: string }
+  | { type: "logoutMcp"; name: string }
+  | { type: "reconnectMcp" }
+  | { type: "mcpListStatus" }
+  | { type: "getAgents" }
+  | { type: "openAgentFile"; path: string }
+  | { type: "createAgent"; agent: AgentInput }
+  | { type: "updateAgent"; path: string; agent: AgentInput }
+  | { type: "deleteAgent"; path: string }
+  | { type: "duplicateAgent"; path: string }
+  | { type: "getAccountData" }
+  | { type: "launchSlash"; command: string }
+  | { type: "setModel"; model: string }
+  | { type: "setVoiceEnabled"; value: boolean }
+  | { type: "setCommitAttribution"; value: string }
+  | { type: "setPrAttribution"; value: string }
+  | { type: "removePermission"; scope: SettingsScope; tool: string; list: PermissionList }
+  | { type: "promptAddPermission"; scope: SettingsScope; list: PermissionList }
+  | { type: "promptCustomModel" }
+  | { type: "restoreClaudeConfig" }
+  | { type: "fetchQuota" }
+  | { type: "installStatusline" }
+  | { type: "uninstallStatusline" }
+  | { type: "promptSaveProfile" }
+  | { type: "openAccountSwitcher" }
+  | { type: "saveStatsImage"; pngBase64: string }
+  | { type: "setSetting"; key: string; value: unknown; scope?: SettingsScope }
+  | { type: "promptAddDirectory" }
+  | { type: "openExtensionSettings" }
+  /**
+   * Write claudeManager.hiddenTabs / claudeManager.tabOrder in one call, so
+   * a drag-drop reorder followed immediately by a checkbox toggle cannot
+   * race into two independent writes that clobber each other.
+   */
+  | { type: "setTabPreferences"; hidden: string[]; order: string[] }
+  | { type: "runCommand"; command: string }
+  /**
+   * A failure the webview caught, mirrored to the host so it lands in the
+   * output channel — the panel has no console the user can reach, so this is
+   * the only copy of the error that survives a reload.
+   */
+  | { type: "webviewError"; source: string; message: string; stack?: string }
+  /** Open the "report a problem" flow (clipboard / GitHub issue / document). */
+  | { type: "reportIssue" }
+  /**
+   * Health-check reply. The host pings after each settings push; a panel
+   * that has gone blank answers nothing, and that silence is logged. The
+   * census says what the webview believes it rendered, which is the
+   * difference between "the app died" and "the app is fine, the view is
+   * not being shown".
+   */
+  | {
+      type: "pong";
+      id: number;
+      tabs: number;
+      rootLength: number;
+      activeTab: string;
+      errors: number;
+      /** Compact key=value dump: geometry, computed styles, overlays. */
+      details?: string;
+    }
+  | { type: "promptRemovePermission"; scope: SettingsScope; tool: string; list: PermissionList }
+  | { type: "resetSettings"; scope: SettingsScope }
+  | { type: "restoreSettingsSnapshot"; scope: SettingsScope; snapshotId: string }
+  | { type: "deleteSettingsSnapshot"; scope: SettingsScope; snapshotId: string }
+  | { type: "ping"; id: number }
+  | { type: "workspacePath"; data: string }
+  | { type: "workspaceBranch"; data: string }
+  | { type: "settings"; [extra: string]: unknown }
+  | { type: "sessions"; data: unknown; stats?: unknown }
+  | {
+      type: "userState";
+      pinned?: string[];
+      deleted?: string[];
+      renames?: Record<string, string>;
+      archived?: string[];
+    }
+  | { type: "navigateList" }
+  | { type: "skills"; data: unknown }
+  | { type: "skillDetail"; data: unknown }
+  | { type: "sessionDetail"; data: unknown }
+  | { type: "fullTextResults"; query: string; ids: string[] }
+  | { type: "searchIndexReady" }
+  | { type: "error"; message: string }
+  | { type: "ack" }
+  | { type: "reloadComplete" }
+  | { type: "projects"; data: string[] }
+  | { type: "accountData"; data: unknown }
+  | { type: "commands"; data: unknown }
+  // `errors` carries user-readable parse failures (malformed config files)
+  // so the webview can show a warning banner while still rendering
+  // whatever parsed successfully.
+  | { type: "hooks"; data: unknown; errors?: string[] }
+  | { type: "mcpServers"; data: unknown; errors?: string[] }
+  | { type: "promptHistory"; data: unknown }
+  | { type: "memoryStore"; data: unknown }
+  | { type: "pluginsData"; data: unknown }
+  | { type: "agents"; data: unknown; errors?: string[] }
+  | { type: "quotaData"; result: unknown }
+  | { type: "terminalSessions"; ids: string[] }
+  | { type: "tempSessions"; ids: string[] }
+  /**
+   * Git-worktree metadata for the current session list, keyed by session id.
+   * Posted after the `sessions` message so the list renders instantly and
+   * worktree badges + repo grouping fill in once git resolution finishes.
+   * Values pass through as `unknown` to keep the shared protocol free of the
+   * feature-local `WorktreeRef` type; the sessions feature narrows on receipt.
+   */
+  | { type: "worktrees"; map: Record<string, unknown> }
+  | { type: "viewTerminal"; sessionId: string }
+  // === CHECKPOINTS MESSAGES ===
+  /**
+   * File Checkpoints: Claude Code's per-file version backups under
+   * ~/.claude/file-history. The webview never names a blob — it sends the
+   * session, the absolute file path and the version, and the host re-derives
+   * `sha256(path).slice(0,16)@v<N>` itself.
+   */
+  | { type: "getCheckpointSessions" }
+  | { type: "getCheckpoints"; sessionId: string }
+  | { type: "diffCheckpoint"; sessionId: string; filePath: string; version: number }
+  | { type: "restoreCheckpoint"; sessionId: string; filePath: string; version: number }
+  /** Host → webview. `data` is CheckpointSessionSummary[], narrowed by the feature. */
+  | { type: "checkpointSessions"; data: unknown }
+  /**
+   * Host → webview. `data` is CheckpointFile[]. `orphanCount` is how many
+   * blobs the session directory holds that no transcript line maps to a path.
+   */
+  | { type: "checkpoints"; sessionId: string; data: unknown; orphanCount: number }
+  // === END CHECKPOINTS MESSAGES ===
+  // === SESSIONS MESSAGES ===
+  // Inbound (webview → host) session messages handled in
+  // features/sessions/messageHandlers.ts. `search`/`filter` ask the host to
+  // re-group the session list server-side; the webview currently filters
+  // client-side instead, so these are a retained host capability rather than
+  // an actively-sent message (kept so the host stays able to serve them).
+  | { type: "search"; query: string }
+  | { type: "filter"; project?: string; branch?: string; dateRange?: [number, number] }
+  | { type: "deleteSession"; sessionId: string }
+  | { type: "copyMarkdown"; sessionId: string }
+  | { type: "openFile"; path: string }
+  /**
+   * Recreate a Claude-created worktree removed from disk, then resume the
+   * session inside it. The host runs `git worktree add` behind a confirm modal.
+   */
+  | { type: "createWorktree"; sessionId: string }
+  /**
+   * Host → webview incremental session-list update. Carries only changed
+   * rows so a file-watcher tick does not re-post the entire tree. The
+   * webview applies it via signal mutation (`applyDelta`). Sessions are
+   * passed through as `unknown[]` to keep the shared protocol free of the
+   * feature-local `Session` type; the feature narrows on receipt.
+   *
+   * Receive side only today: the webview handles this, but the host still
+   * re-posts the full `sessions` list on each watcher tick, so nothing emits
+   * a delta yet. Kept wired so an incremental emitter can drop in later.
+   */
+  | {
+      type: "sessions.delta";
+      payload: { added?: unknown[]; updated?: unknown[]; removed?: string[] };
+    };
+// === END SESSIONS MESSAGES ===
+
+type WebviewMessageType =
+  | "ready"
+  | "markDemoSeen"
+  | "refresh"
+  | "newSession"
+  | "newTempSession"
+  | "promoteTempSession"
+  | "continueLastSession"
+  | "resumeSession"
+  | "resumeMultiple"
+  | "getSessionDetail"
+  | "pinSession"
+  | "unpinSession"
+  | "getPromptHistory"
+  | "copyPrompt"
+  | "openPromptSession"
+  | "getPlugins"
+  | "openPluginDirectory"
+  | "openPluginSettings"
+  | "copyPluginId"
+  | "setPluginEnabled"
+  | "getMemories"
+  | "openMemory"
+  | "revealMemory"
+  | "deleteMemory"
+  | "archiveSession"
+  | "unarchiveSession"
+  | "archiveSessions"
+  | "confirmDelete"
+  | "renameSession"
+  | "forkSession"
+  | "copyCommand"
+  | "openProject"
+  | "openUrl"
+  | "exportSession"
+  | "importSession"
+  | "searchFullText"
+  | "launchChatWithPrompt"
+  | "openProjectAndChat"
+  | "reloadAll"
+  | "bulkPinSessions"
+  | "bulkDeleteSessions"
+  | "bulkExportSessions"
+  | "importMultipleSessions"
+  | "getSkills"
+  | "getSkillDetail"
+  | "openSkillFile"
+  | "deleteSkill"
+  | "getCommands"
+  | "openCommandFile"
+  | "getHooks"
+  | "openSettingsFile"
+  | "toggleHookEnabled"
+  | "deleteHook"
+  | "updateHook"
+  | "promptAddHook"
+  | "openHooksPanel"
+  | "getMcpServers"
+  | "openMcpConfig"
+  | "toggleMcpServer"
+  | "deleteMcpServer"
+  | "addMcpServer"
+  | "updateMcpServer"
+  | "authenticateMcp"
+  | "logoutMcp"
+  | "reconnectMcp"
+  | "mcpListStatus"
+  | "getAgents"
+  | "openAgentFile"
+  | "createAgent"
+  | "updateAgent"
+  | "deleteAgent"
+  | "duplicateAgent"
+  | "getAccountData"
+  | "launchSlash"
+  | "setModel"
+  | "setVoiceEnabled"
+  | "setCommitAttribution"
+  | "setPrAttribution"
+  | "removePermission"
+  | "promptAddPermission"
+  | "promptCustomModel"
+  | "restoreClaudeConfig"
+  | "fetchQuota"
+  | "installStatusline"
+  | "uninstallStatusline"
+  | "promptSaveProfile"
+  | "openAccountSwitcher"
+  | "saveStatsImage"
+  | "setSetting"
+  | "promptAddDirectory"
+  | "openExtensionSettings"
+  | "setTabPreferences"
+  | "runCommand"
+  | "webviewError"
+  | "reportIssue"
+  | "pong"
+  | "ping"
+  | "promptRemovePermission"
+  | "resetSettings"
+  | "restoreSettingsSnapshot"
+  | "deleteSettingsSnapshot"
+  | "getCheckpointSessions"
+  | "getCheckpoints"
+  | "diffCheckpoint"
+  | "restoreCheckpoint"
+  // === SESSIONS MESSAGES ===
+  | "search"
+  | "filter"
+  | "deleteSession"
+  | "copyMarkdown"
+  | "openFile"
+  | "createWorktree"
+  | "viewTerminal";
+// === END SESSIONS MESSAGES ===
+
+export type WebviewMessage = Extract<Message, { type: WebviewMessageType }>;
+export type HostMessage = Exclude<Message, WebviewMessage>;
+
+export const HOST_MESSAGE_TYPES: readonly HostMessage["type"][] = [
+  "workspacePath",
+  "workspaceBranch",
+  "settings",
+  "sessions",
+  "userState",
+  "navigateList",
+  "skills",
+  "skillDetail",
+  "sessionDetail",
+  "fullTextResults",
+  "searchIndexReady",
+  "error",
+  "ack",
+  "reloadComplete",
+  "projects",
+  "accountData",
+  "commands",
+  "hooks",
+  "mcpServers",
+  "agents",
+  "quotaData",
+  "sessions.delta",
+  "terminalSessions",
+  "tempSessions",
+  "worktrees",
+  "checkpointSessions",
+  "checkpoints",
+];

@@ -1,0 +1,225 @@
+/**
+ * The session list: launch actions, filters, the count/bulk header, a
+ * virtualized list of session rows with date-group section headers, and the
+ * app footer.
+ *
+ * The list is virtualized (special-consideration B) so 5,000+ sessions scroll
+ * in constant time. Section headers are interleaved into the same row array
+ * the virtualizer renders — see `buildRows` (sessions `lib`) for the section
+ * order and the day/week/month ladder. `ITEM_HEIGHT` is only the pre-measure
+ * estimate: VirtualList measures each rendered row, so the short header rows
+ * and taller session rows coexist without offset drift.
+ *
+ * Headers are collapsible. Collapsing a section drops its rows from
+ * `buildRows` output entirely, so the virtualizer never sees them — no
+ * per-row hidden state, and the row count shrinks with the view.
+ */
+import { useEffect, useState } from "preact/hooks";
+import { Button, ContextMenu, EmptyState, VirtualList } from "../../../../../webview/shared/ui";
+import {
+  bulkModeSignal,
+  clearFullTextHits,
+  clearSelection,
+  currentProjectSignal,
+  currentRepoRootSignal,
+  detailLoadingSignal,
+  filteredSignal,
+  openTerminalsSignal,
+  rowsSignal,
+  tempSessionsSignal,
+  pinnedSignal,
+  searchQuerySignal,
+  selectAll,
+  selectedIdSignal,
+  selectionSignal,
+  archivedSignal,
+  sessionsSignal,
+  toggleGroupCollapsed,
+  toggleSelected,
+  viewSignal,
+  worktreesSignal,
+} from "../../model";
+import { isSameRepo } from "../../lib";
+import {
+  sendGetSessionDetail,
+  sendContinueTask,
+  sendViewTerminal,
+} from "../../api";
+import { ActionsBar } from "../components/ActionsBar";
+import { Filters } from "../components/Filters";
+import { GroupHeader } from "../components/GroupHeader";
+import { ListHeader } from "../components/ListHeader";
+import { SessionItem } from "../components/SessionItem";
+import { buildSessionMenuItems } from "../components/sessionMenu";
+
+/**
+ * Estimated row height for the virtualizer. VirtualList measures each rendered
+ * row, so short group headers and taller session rows coexist without drift —
+ * this only sizes the scrollbar before the first measure.
+ */
+const ITEM_HEIGHT = 64;
+
+interface MenuState {
+  sessionId: string;
+  x: number;
+  y: number;
+}
+
+export function ListView() {
+  const filtered = filteredSignal.value;
+  const total = filtered.length;
+  const pinned = pinnedSignal.value;
+  const selectedId = selectedIdSignal.value;
+  const selection = selectionSignal.value;
+  const bulk = bulkModeSignal.value;
+  const query = searchQuerySignal.value;
+  const openTerminals = openTerminalsSignal.value;
+  const tempSessions = tempSessionsSignal.value;
+  const archived = archivedSignal.value;
+  const currentProject = currentProjectSignal.value;
+  const worktrees = worktreesSignal.value;
+  const repoRoot = currentRepoRootSignal.value;
+  const [menu, setMenu] = useState<MenuState | null>(null);
+
+  const rows = rowsSignal.value;
+
+  // Bulk-mode keyboard shortcuts, scoped to bulk mode so they're inert
+  // otherwise. Ignored when focus is in an input/textarea (verbatim v1 listView
+  // guard) so the search field keeps native behaviour:
+  //   - Ctrl/Cmd+A selects every visible session (native select-all elsewhere);
+  //   - Escape exits bulk mode (clearing the selection) — the same dismiss-on-
+  //     Escape gesture every other transient surface uses, applied to this
+  //     transient mode for consistency.
+  useEffect(() => {
+    if (!bulk) return;
+    const onKey = (e: KeyboardEvent): void => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? "";
+      const inField = tag === "INPUT" || tag === "TEXTAREA";
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        if (inField) return;
+        e.preventDefault();
+        selectAll(filteredSignal.value.map((s) => s.id));
+      } else if (e.key === "Escape") {
+        if (inField) return;
+        clearSelection();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [bulk]);
+
+  const openDetail = (id: string): void => {
+    selectedIdSignal.value = id;
+    detailLoadingSignal.value = true;
+    viewSignal.value = "detail";
+    sendGetSessionDetail(id);
+  };
+
+  const resume = (id: string): void => {
+    const s = sessionsSignal.value.find((x) => x.id === id);
+    if (s) sendContinueTask(id);
+  };
+
+  const view = (id: string): void => {
+    sendViewTerminal(id);
+  };
+
+  const onToggleSelect = (id: string): void => {
+    toggleSelected(id);
+  };
+
+  const openMenu = (id: string, x: number, y: number): void => {
+    setMenu({ sessionId: id, x, y });
+  };
+
+  return (
+    <div class="panel" id="listView">
+      <ActionsBar />
+      <Filters />
+      <ListHeader totalCount={total} />
+      {total === 0 ? (
+        query ? (
+          <EmptyState
+            icon="search-slash"
+            title="No matching sessions"
+            description="Try a different keyword or clear the search to see all sessions."
+          >
+            <Button
+              onClick={() => {
+                // The search box is controlled by searchQuerySignal, so clearing
+                // the signal re-syncs the shared <SearchInput> mirror to empty.
+                searchQuerySignal.value = "";
+                clearFullTextHits();
+              }}
+            >
+              Clear search
+            </Button>
+          </EmptyState>
+        ) : (
+          <EmptyState
+            icon="inbox"
+            title="No sessions yet"
+            description="Start a new Claude Code session — your history will appear here."
+          />
+        )
+      ) : (
+        <VirtualList
+          label="Sessions"
+          class="list"
+          items={rows}
+          itemHeight={ITEM_HEIGHT}
+          renderItem={(row) =>
+            row.kind === "header" ? (
+              <GroupHeader
+                key={`h:${row.label}`}
+                label={row.label}
+                count={row.count}
+                collapsed={row.collapsed}
+                onToggle={toggleGroupCollapsed}
+              />
+            ) : (
+              <SessionItem
+                key={row.session.id}
+                session={row.session}
+                isActive={row.session.id === selectedId}
+                isPinned={pinned.has(row.session.id)}
+                isSelected={selection.has(row.session.id)}
+                bulkMode={bulk}
+                hasOpenTerminal={openTerminals.has(row.session.id)}
+                isTemp={tempSessions.has(row.session.id)}
+                worktree={worktrees[row.session.id]}
+                isDiffProject={
+                  Boolean(currentProject && row.session.projectKey !== currentProject) &&
+                  // A sibling worktree of the current repo is resumable (its
+                  // checkout path is intact), so it is NOT a "different project".
+                  !isSameRepo(row.session, worktrees, repoRoot)
+                }
+                onSelect={openDetail}
+                onResume={resume}
+                onView={view}
+                onToggleSelect={onToggleSelect}
+                onContextMenu={openMenu}
+              />
+            )
+          }
+        />
+      )}
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={
+          menu
+            ? buildSessionMenuItems(
+                menu.sessionId,
+                pinned.has(menu.sessionId),
+                tempSessions.has(menu.sessionId),
+                archived.has(menu.sessionId),
+              )
+            : []
+        }
+        onClose={() => setMenu(null)}
+      />
+    </div>
+  );
+}

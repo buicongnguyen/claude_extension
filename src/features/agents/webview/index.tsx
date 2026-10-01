@@ -1,0 +1,124 @@
+/**
+ * Agents feature entry point. Mounted by the shell's `TabPanel` when the
+ * Agents tab activates. Owns inbound-message wiring (via the shared message
+ * bus), the initial data request, switching between list and detail views,
+ * and the create/edit form modal.
+ */
+import { useEffect, useState } from "preact/hooks";
+import type { AgentInput } from "../../../shared/protocol/messages";
+import {
+  activeTab,
+  registerFeatureHandler,
+  registerPaletteSource,
+} from "../../../webview/shared/model";
+import { EmptyState, ListSkeleton } from "../../../webview/shared/ui";
+import type { Agent } from "../types";
+import { useAgentsApi } from "./api";
+import {
+  agents,
+  error,
+  loading,
+  resetAgentsState,
+  selectAgent,
+  selectedAgent,
+  setAgents,
+  setError,
+} from "./model";
+import { AgentDetailView, AgentForm, AgentListView } from "./ui";
+
+/** Form state: closed, or open in create (null) / edit (an Agent) mode. */
+type FormState = { open: false } | { open: true; agent: Agent | null };
+
+export default function AgentsTab() {
+  const api = useAgentsApi();
+  const [form, setForm] = useState<FormState>({ open: false });
+
+  useEffect(() => {
+    // Route host messages for this feature into the signals. The bus parses
+    // and validates payloads with valibot before invoking this handler.
+    const off = registerFeatureHandler("agents", (msg) => {
+      if (msg.type === "agents") {
+        setAgents((msg.data as Agent[]) ?? [], msg.errors ?? []);
+      }
+    });
+    const offError = registerFeatureHandler("error", (msg) => {
+      if (msg.type === "error") setError(msg.message);
+    });
+
+    api.getAgents();
+
+    // Agents in the command palette. The source is called per query, so
+    // it always reads the live signal without this module subscribing to it.
+    const offPalette = registerPaletteSource("agents", () =>
+      agents.value.map((s) => ({
+        id: `agents:${s.name}`,
+        title: s.name,
+        subtitle: s.description,
+        group: "Agents",
+        icon: "bot",
+        hint: s.model,
+        run: () => {
+          activeTab.value = "agents";
+          selectAgent(s);
+        },
+      })),
+    );
+    return () => {
+      off();
+      offError();
+      offPalette();
+      resetAgentsState();
+    };
+    // Mount-once: register handlers, request data, tear down on unmount.
+  }, []);
+
+  if (error.value) {
+    return (
+      <EmptyState icon="circle-alert" title="Couldn't load agents" description={error.value} />
+    );
+  }
+
+  if (loading.value) {
+    return <ListSkeleton />;
+  }
+
+  const submitForm = (input: AgentInput): void => {
+    if (form.open && form.agent) {
+      api.updateAgent(form.agent.path, input);
+    } else {
+      api.createAgent(input);
+    }
+    setForm({ open: false });
+  };
+
+  // The create/edit form is a full-panel view (not an overlay) — it replaces
+  // the list/detail while open, matching the sidebar's single-column flow.
+  if (form.open) {
+    return (
+      <AgentForm
+        agent={form.agent}
+        existing={agents.value.map((a) => ({ name: a.name, scope: a.scope }))}
+        onClose={() => setForm({ open: false })}
+        onSubmit={submitForm}
+      />
+    );
+  }
+
+  const selected = selectedAgent.value;
+  if (selected) {
+    return (
+      <AgentDetailView
+        agent={selected}
+        onBack={() => selectAgent(null)}
+        onOpenFile={api.openAgentFile}
+        onEdit={(a) => setForm({ open: true, agent: a })}
+        onDuplicate={(a) => api.duplicateAgent(a.path)}
+        onDelete={(a) => api.deleteAgent(a.path)}
+      />
+    );
+  }
+
+  return (
+    <AgentListView onRefresh={api.getAgents} onNew={() => setForm({ open: true, agent: null })} />
+  );
+}

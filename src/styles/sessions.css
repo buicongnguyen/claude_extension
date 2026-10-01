@@ -1,0 +1,892 @@
+/* ============================================================================
+   Claude Session Manager — Session Styles
+   Session list items, detail view, footer
+   ============================================================================ */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Session List Items
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Collapsible section header in the session list (Active / Today / Pinned /
+   the day-week-month ladder). A separate class from the shared `.group-label`
+   used by agents and skills — those headers are not interactive, and turning
+   the shared rule into a button would ripple into both. The padding matches
+   `.group-label` exactly so every list in the extension keeps one section
+   rhythm. */
+.session-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  /* A section heading must be distinguishable from a row without out-shouting
+     one. An earlier version was too quiet and the sections vanished while
+     scanning — every row already carries a hairline, so small bold text in the
+     same column read as just another row. The fix then reached for every
+     device at once: a filled band, a rule above AND below, 700 weight,
+     uppercase and tracking. That inverted the hierarchy instead of fixing it,
+     since `.item-name` is plain --fg at normal weight, so the word "TODAY"
+     outranked the sessions it was labelling.
+
+     Weight was the wrong lever. The recessed fill is the one device that says
+     "not a row" without competing for attention: it works on the surface
+     rather than on the type, so the heading can sit a step BELOW the session
+     titles in emphasis while still being unmistakably a divider. The rules
+     above and below were the redundant part — a band already has two edges —
+     and 700 weight against a normal-weight title was the inversion itself.
+
+     The fill is --role-track-bg (VS Code's editorWidget surface), so it tracks
+     whatever theme is loaded instead of a hardcoded tint that only reads right
+     in one of them.
+
+     Padding stays symmetric. A taller lead-in above the label would group the
+     heading with the rows below it more strongly, but a FILLED band makes that
+     asymmetry visible as a lopsided block — and the space cannot move to a
+     margin, because VirtualList measures rows with offsetHeight, which
+     excludes margins and would drift the scroll offsets. */
+  background: var(--role-track-bg);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-dim);
+  padding: var(--space-sm) var(--space-2xl);
+}
+.session-group-header:hover {
+  color: var(--fg-dim);
+  background: var(--role-selected-hover-bg);
+}
+.session-group-header:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* One chevron path is shipped (chevron-down); the collapsed state rotates it
+   rather than adding a second icon to the bundle. */
+.session-group-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+}
+.session-group-header.collapsed .session-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.session-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The count still reports what a collapsed section holds — collapsing hides
+   rows, never information — but at the label's own weight. At 600 against a
+   500 label it was the loudest thing in the heading, which is backwards for
+   the least important. */
+.session-group-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+
+.item {
+  padding: var(--space-lg) var(--space-2xl);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  /* Native-feeling hover: ease the row highlight in rather than snapping. */
+  transition: background var(--transition-control);
+}
+.item:focus-visible {
+  outline: 1px solid var(--list-focus);
+  outline-offset: -1px;
+}
+/* No permanent right inset. The action cluster (Resume + the rest) is an
+   absolutely-positioned OVERLAY that only appears on hover/focus, so at rest
+   the name / relative-time in row1 and the prompt subtitle use the row's FULL
+   width — no ~46px gap wasted on a button that isn't visible. On hover the
+   cluster fades in over the text tail on a matching-bg overlay (see
+   `.item-actions` below), the standard VS Code list-action pattern, so the
+   Resume button never overlaps the text illegibly. */
+
+/* Selected row indicator — left border accent + subtle background.
+   Active (detail-open) takes precedence so the resume-target highlight
+   keeps reading as the dominant signal. */
+.session-item.is-selected {
+  background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.session-item.is-selected.active {
+  background: var(--bg-active);
+}
+
+
+/* Fixed header above the scrolling list. Toggles between the
+   resting "N sessions + Select" view and the bulk-action toolbar.
+   Sits in the panel flex layout, never inside the scroll area. */
+.list-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-2xl);
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+.list-header::-webkit-scrollbar { display: none; }
+.list-header-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+.list-header.list-header-bulk {
+  background: var(--bg-active);
+  color: var(--bg-active-fg);
+  font-size: var(--fs-base);
+}
+.list-header.list-header-bulk .list-header-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  margin-right: var(--space-xs);
+}
+
+/* Bulk toolbar actions. Chrome comes from the shared .btn-ghost: these sit on
+   the strip's own accent fill, where an outline is a box drawn on a box. Only
+   the colour and the compact metrics are local. */
+.bulk-btn.btn {
+  height: auto;
+  padding: 2px var(--space-md);
+  font-size: var(--fs-xs);
+  color: var(--bg-active-fg);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.bulk-btn.btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-active-fg) 16%, transparent);
+}
+.bulk-btn--danger.btn { color: var(--role-danger-fg); }
+.item:last-child             { border-bottom: none; }
+.item:hover                  { background: var(--bg-hover); }
+.session-item:hover .item-time { visibility: hidden; }
+.item.active                 { background: var(--bg-active); color: var(--bg-active-fg); }
+
+.item-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.live-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent);
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+/* Idle session: process alive but not generating. Solid muted dot,
+   no pulse — keeps the row visually distinct from "busy" without
+   stealing attention. */
+.live-dot[data-status="idle"] {
+  background: var(--fg-dim, #888);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg-dim, #888) 25%, transparent);
+  animation: none;
+}
+/* Awaiting permission OR a multi-option user question: both block on
+   the user, so they share the same orange + faster-pulse treatment.
+   `awaiting_question` is a synthetic status the parser raises when a
+   transcript shows an unanswered AskUserQuestion / ExitPlanMode
+   tool_use (the CLI itself just marks the session "idle" in those
+   cases). The three permission strings cover known CLI variants. */
+.live-dot[data-status="awaiting_permission"],
+.live-dot[data-status="waiting_permission"],
+.live-dot[data-status="permission_prompt"],
+.live-dot[data-status="awaiting_question"] {
+  background: var(--orange, #f5a623);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange, #f5a623) 30%, transparent);
+  animation: live-pulse 1.0s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+.item-name {
+  font-size: var(--fs-md);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+.item.active .item-name      { color: var(--bg-active-fg); }
+
+/*
+ * Hover-revealed row action: the Resume affordance. The cluster is pinned to
+ * the right edge of the row; Resume only appears on hover (or when focused via
+ * keyboard) so the row stays calm at rest, mirroring v1. The redundant ⋯
+ * overflow trigger was removed — the right-click context menu is the single
+ * action-menu path now.
+ *
+ * Overlay pattern (VS Code list actions): the row reserves NO permanent space
+ * for this cluster, so the title/prompt run full-width at rest. On hover the
+ * cluster appears ON TOP of the text tail, riding a background that matches the
+ * row's hover background (--bg-hover) with a short left-to-right gradient fade
+ * so the text disappears cleanly UNDER the actions instead of colliding with
+ * them. `padding-left` + the gradient give the fade its run-up; the solid tail
+ * sits behind the button itself. The selected/active variants below swap the
+ * matching bg so the overlay blends on those rows too.
+ */
+.item-actions {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding-right: var(--space-lg);
+  padding-left: var(--space-2xl);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  /* Solid tail (right) behind the buttons, fading to transparent on the left so
+     the covered text edge dissolves rather than hard-clipping. Only shown while
+     the cluster is visible (hover/focus); a hidden Resume keeps the row clean. */
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--bg-hover) var(--space-2xl)
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-control);
+}
+/* Reveal the overlay (and re-enable its hit targets) on row hover or when the
+   Resume button inside it is focused via keyboard (:focus-within). */
+.session-item:hover .item-actions,
+.item-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Match the overlay tail to the selected / active row backgrounds so it blends
+   on those rows instead of flashing the resting hover colour over a darker
+   selection. Active (detail-open) wins, mirroring the row bg precedence. */
+.session-item.is-selected .item-actions {
+  background: linear-gradient(to right, transparent, var(--bg-hover) var(--space-2xl));
+}
+.session-item.is-selected.active .item-actions,
+.item.active .item-actions {
+  background: linear-gradient(to right, transparent, var(--bg-active) var(--space-2xl));
+}
+@media (prefers-reduced-motion: reduce) {
+  .item-actions { transition: none; }
+}
+
+/* Resume is a shared icon <Button>, so the chromeless `.btn-icon` look (native
+   ghost + toolbar hover/active fill) applies. Here we only own the play-green
+   tint; the reveal-on-hover now lives on the `.item-actions` overlay (opacity)
+   so the button visibility no longer needs its own toggle. The hover/active/
+   focus affordance comes from `.btn-icon` in components-native.css so it
+   matches every other toolbar icon button. */
+.item-resume {
+  color: var(--green);
+}
+
+.item-time {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.item.active .item-time      { color: var(--bg-active-fg); opacity: 0.7; }
+
+.pin-icon {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+}
+.session-item:hover .pin-icon { visibility: hidden; }
+
+.item-prompt {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+/* At rest the prompt runs the row's full width (no reserved action inset). On
+   hover the `.item-actions` overlay simply fades in over the prompt's tail with
+   a matching-bg gradient, so the prompt needs no dodge margin — it ellipsizes
+   under the overlay cleanly. */
+.item.active .item-prompt    { color: var(--bg-active-fg); opacity: 0.65; }
+
+.item-row2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+  height: 18px;
+  /* Allow children with their own ellipsis to shrink below content
+     width. Without this, flex's default min-width:auto lets the
+     branch tag + project name push the row past the card edge on
+     long branches (e.g. feat/detail-view-enhancements). */
+  min-width: 0;
+}
+.item-row2 > .tag {
+  /* Every chip hugs its own text. `flex-grow: 0` matters now that these are
+     bordered pills: a chip allowed to grow stretches into a long empty
+     capsule with its label stranded at one end, which a borderless text run
+     hid completely. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  /* Shrink the branch ahead of the project, so a 200-char branch ellipsizes
+     inside its own pill instead of squeezing the project out of the row. */
+  flex-shrink: 2;
+}
+.item-row2 > .tag.folder {
+  /* The project yields last, and may run wider than the branch clamp, since
+     that clamp exists to stop a long BRANCH dominating the row. */
+  flex-shrink: 1;
+  max-width: 65%;
+}
+
+/* On the selected row the chips take the active foreground, or they keep a
+   resting colour against a filled blue background. */
+.item.active .tag.folder     { color: var(--bg-active-fg); opacity: 0.8; }
+
+.show-more-row {
+  padding: var(--space-xl) var(--space-2xl);
+}
+.show-more-btn {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition-control), color var(--transition-control), border-color var(--transition-control);
+}
+.show-more-btn:hover         { color: var(--fg); background: var(--bg-hover); border-color: var(--accent); }
+.show-more-btn:focus-visible { outline: var(--focus-ring); outline-offset: -1px; }
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Detail View
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* .back-btn now lives in components.css (shared <BackButton> component). */
+
+/* Scrollable body below the sticky back button. Without this the detail
+   page's overflow is hidden (inherited from .panel) and prompts get clipped. */
+.d-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.d-head    { padding: var(--space-sm) var(--space-2xl) var(--space-md); }
+/* Inline variant — title + badge(s) on one centred row. Replaces the three
+   byte-identical `.agent-detail-head` / `.mcp-detail-head` / `.cmd-detail-head`
+   rules that agents, mcp, and commands each carried separately. */
+.d-head--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-lg);
+}
+/* Monospace title (command names like /add-dir). Only swaps the family; the
+   shared `.d-title` size/weight stay — unlike the `.mono` utility which also
+   shrinks font-size. */
+.d-title--mono { font-family: var(--mono); }
+.d-title {
+  font-size: var(--fs-xl, 1.15rem);
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.3;
+  margin-bottom: 2px;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.d-subtitle {
+  font-size: var(--fs-base);
+  color: var(--fg-dim);
+  margin-bottom: var(--space-sm);
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.d-tags {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+/*
+ * Contextual meta row — project + branch pills + timestamp. Single
+ * line, wraps on narrow panels. Pills reuse the tag token pattern
+ * but at a smaller size so they read as metadata, not content.
+ */
+.d-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  margin-top: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+.d-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 1px var(--space-sm);
+  border-radius: 10px;
+  background: var(--badge-neutral-bg);
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.d-meta-pill-branch {
+  font-family: var(--font-mono, monospace);
+  font-size: calc(var(--fs-xs) - 0.5px);
+}
+.d-meta-dot { color: var(--fg-dim); }
+
+/*
+ * Stat strip — summary facts at a glance (messages · tools · tokens
+ * · duration). Each stat stacks a value over a label. No icons, no
+ * borders — whitespace carries grouping.
+ */
+
+.d-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-2xl);
+  margin: 0 var(--space-2xl) var(--space-lg);
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.d-notice svg               { flex-shrink: 0; margin-top: 2px; color: var(--link); }
+.d-notice strong             { color: var(--fg); }
+
+/*
+ * Worktree info block — shown in the detail header for a session that ran in a
+ * Claude/user git worktree. Names the checkout path, branch, and shared repo
+ * root so the worktree relationship is legible at a glance.
+ */
+.d-worktree {
+  margin-top: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+}
+.d-worktree--missing { opacity: 0.7; }
+.d-worktree__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--fg);
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+}
+.d-worktree__title .icon { flex: none; color: var(--link); }
+.d-worktree__flag {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: var(--badge-neutral-bg);
+  color: var(--fg-dim);
+}
+.d-worktree__flag--gone {
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #d49a00) 18%, transparent);
+  color: var(--vscode-editorWarning-foreground, #d49a00);
+}
+.d-worktree__row {
+  display: flex;
+  gap: var(--space-md);
+  line-height: 1.7;
+  min-width: 0;
+}
+.d-worktree__k { flex: none; width: 68px; color: var(--fg-dim); }
+.d-worktree__v {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+/*
+ * Detail-view action buttons. One responsive grid containing every
+ * button. Only the *primary* action spans the full top row — every
+ * other button (including Delete) flows through the auto-fit grid so
+ * they all share the row width equally. minmax(0, 1fr) means columns
+ * have no minimum — they all stretch to identical widths regardless
+ * of label length, eliminating uneven wraps.
+ */
+/* Keeps the overflow trigger from stretching in the action row's flex. */
+.d-actions-more { display: flex; flex-shrink: 0; }
+
+/* Live-state chip in the detail meta row: the dot keeps the colour coding the
+   list uses, the words carry the meaning. */
+.d-meta-pill-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.d-meta-pill-live .live-dot { flex-shrink: 0; }
+
+.d-actions {
+  /* Flex-wrap so each button sizes to its content and wraps cleanly — never
+     cropping. (Was an auto-fit grid with minmax(96px, 1fr); those equal narrow
+     columns combined with `.btn`'s ellipsis clip truncated longer labels.) */
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding: 0 var(--space-2xl) var(--space-xl);
+}
+/* The overflow trigger is chromeless like the ghosts it sits beside — as an
+   icon <Button> it carried a border and fill and was the only boxed control
+   in the row. */
+.d-actions-overflow { padding: 0 var(--space-md); }
+
+/* The figures sit on the panel's own inset, so the first column's numbers line
+   up with the title and the chips above them. The grid carries the inset and
+   the cells rule their own dividers, so the lines stop at the text rather than
+   running to the panel edge. */
+.d-stat-grid { padding: 0 var(--space-2xl) var(--space-xl); }
+
+.d-actions > .btn {
+  /* Centre icon+label; the shared `… > .btn` override (components.css) handles
+     the ellipsis-clip reset + content-width sizing so labels never crop. */
+  justify-content: center;
+}
+/* `.btn.primary` is the legacy modifier; `.btn-primary` is the shared
+   <Button variant="primary"> class. Both size to their label and sit inline
+   with the actions beside them.
+
+   This used to be `flex: 1 0 100%`, forcing the primary across the whole row
+   and wrapping everything else onto a second line. That reasoning held when
+   the others were bordered boxes of competing weight — a full-width bar was
+   the only way to rank them. Now that the rest are chromeless, the fill alone
+   carries the rank, and stretching it makes one row into two while reading as
+   a page-level commitment rather than one option among four. */
+.d-actions > .btn.primary,
+.d-actions > .btn-primary {
+  flex: 0 0 auto;
+}
+
+.d-section {
+  padding: var(--space-lg) var(--space-2xl) var(--space-xl);
+  border-top: 1px solid var(--border);
+}
+.d-label {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-section);
+  margin-bottom: var(--space-md);
+}
+.d-kv {
+  display: flex;
+  gap: var(--space-lg);
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-base);
+}
+.d-k { width: 55px; flex-shrink: 0; color: var(--fg-dim); }
+.d-v { color: var(--fg); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Label row with inline toggle (used for Messages section header) */
+.d-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+}
+.d-label-row .d-label { margin-bottom: 0; }
+
+/* Message order toggle now uses the shared <Segmented size="sm"> (.vsc-segmented). */
+
+.d-msg-hint {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  margin-bottom: var(--space-md);
+}
+
+/*
+ * Sticky messages header — stays pinned at the top of the scrollable
+ * detail pane so users can search + switch modes without scrolling
+ * back up. Solid background + bottom border + small z-index beat
+ * the scrolling messages underneath.
+ */
+.d-msg-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg, var(--vscode-editor-background));
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
+  margin: calc(var(--space-sm) * -1) 0 var(--space-md);
+  border-bottom: 1px solid var(--border);
+}
+.d-msg-header .d-label-row { margin-bottom: var(--space-sm); }
+.d-msg-header .d-msg-search { margin: 0; }
+
+/*
+ * Transcript search bar — single row above the message list. Input
+ * takes available width; match-count + clear button float at the
+ * right edge. Muted throughout so it reads as a control strip, not
+ * a section of its own.
+ */
+/*
+ * Search bar stays a single full-width input. Count + clear button
+ * overlay the right edge of the input (via an addon block positioned
+ * absolutely) so enabling search doesn't reflow the layout or shrink
+ * the input. Input gains right padding when `has-value` is present
+ * to reserve space for the addons.
+ */
+.d-msg-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0 var(--space-md);
+}
+/* The shared <SearchInput> fills the row so the transcript's find box is the
+   same control as the search box on every other tab; the match count rides
+   beside it rather than overlaying the input. */
+.d-msg-search > .tf {
+  flex: 1;
+  min-width: 0;
+}
+.d-msg-search-count {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+
+/*
+ * Match highlight. Low-saturation amber tint so it reads as marked
+ * without dominating the content. Works across light + dark themes
+ * via `--vscode-editor-findMatchHighlightBackground` fallback.
+ */
+.d-match {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.28));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Message items — left border distinguishes user (accent) from Claude (muted) */
+.d-msg {
+  padding: var(--space-md);
+  padding-left: var(--space-lg);
+  border-left: 2px solid var(--fg-dim);
+  margin-bottom: var(--space-sm);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.d-msg-user {
+  border-left-color: var(--accent);
+  /* A faint wash of the user's actual accent colour (not a fixed blue-purple
+     guess) so it stays correct across themes, same color-mix() pattern used
+     for .bulk-btn.del:hover above. */
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.d-msg-role {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--fg-dim);
+  margin-bottom: var(--space-xs);
+}
+.d-msg-user .d-msg-role { color: var(--accent); }
+.d-msg-content {
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  color: var(--fg);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/*
+ * Message head: role label on the left, action row on the right.
+ * `d-msg-actions` is hover-revealed — empty whitespace by default so
+ * the message content isn't visually crowded.
+ */
+.d-msg { position: relative; }
+.d-msg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+.d-msg-head .d-msg-role { margin-bottom: 0; flex: 1; }
+
+/* Timestamp sits hard right of the role, so the role labels read as one clean
+   left column down the transcript. Pushed there by taking the row's slack;
+   the hover actions that follow keep their own place. */
+.d-msg-time {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.d-msg-actions {
+  display: inline-flex;
+  gap: var(--space-xs);
+  opacity: 0;
+  transition: opacity var(--transition-control);
+}
+.d-msg:hover .d-msg-actions,
+.d-msg-actions:focus-within { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .d-msg-actions { transition: none; }
+}
+
+.d-msg-action {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color var(--transition-control), background var(--transition-control);
+}
+.d-msg-action:hover { color: var(--fg); background: var(--bg-hover); }
+.d-msg-action:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+/* Copy success flash — muted green, 900ms via the JS timeout. */
+.d-msg-action.is-copied {
+  color: var(--green);
+}
+
+/*
+ * Tool use rows. Single line per call — dim fg, monospace arg so
+ * paths and commands read predictably. No icon (we're not adding
+ * extra visual noise per the minimal brief); role-prefixed name
+ * carries the meaning.
+ */
+.d-msg-tools {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.d-msg-tool {
+  display: flex;
+  gap: var(--space-md);
+  align-items: baseline;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  padding: var(--space-xs) 0;
+}
+.d-msg-tool-name {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--fg-dim);
+}
+.d-msg-tool-arg {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, monospace);
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Extended-thinking block — collapsed by default via native
+ * <details>. Disclosure triangle from the browser's default so we
+ * don't ship yet another icon; summary stays muted so it reads as
+ * metadata, not a primary section.
+ */
+.d-msg-thinking {
+  margin-bottom: var(--space-sm);
+  font-size: var(--fs-sm);
+}
+.d-msg-thinking > summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  list-style: revert;
+  padding: var(--space-xs) 0;
+  user-select: none;
+}
+.d-msg-thinking > summary:hover { color: var(--fg-dim); }
+.d-msg-thinking[open] > summary { color: var(--fg-dim); }
+.d-msg-thinking-body {
+  margin-top: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 2px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Per-message token stamp. Right-aligned, tabular nums so digits
+ * line up across messages for quick scanning. Visible at rest
+ * (not hover-revealed) because cost info is something users
+ * often scan down the thread to compare.
+ */
+.d-msg-usage {
+  margin-top: var(--space-sm);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+}
+
+/* .app-footer / .footer-* moved to base.css — the footer is shell chrome
+   (rendered once by App.tsx below the tab content), not sessions content. */

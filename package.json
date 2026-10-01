@@ -1,0 +1,397 @@
+{
+  "name": "claude-manager-personal",
+  "displayName": "Claude Code Manager Personal",
+  "description": "Personal fork of Claude Code Manager: encrypted saved accounts and safer terminal input handling.",
+  "version": "2.15.5",
+  "publisher": "local-personal",
+  "author": {
+    "name": "Vishal Gupta",
+    "url": "https://github.com/vishalguptax"
+  },
+  "license": "Apache-2.0",
+  "icon": "media/marketplace-icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.10.0",
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Visualization"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-manager",
+    "claude-code-manager",
+    "anthropic",
+    "claude code extension",
+    "claude code gui",
+    "claude code ui",
+    "claude code account switcher",
+    "claude session manager",
+    "resume claude session",
+    "claude usage tracker",
+    "claude token usage",
+    "claude skill manager",
+    "claude agents",
+    "claude hooks",
+    "claude commands",
+    "claude mcp",
+    "claude code mcp manager",
+    "mcp",
+    "mcp manager",
+    "model-context-protocol",
+    "session manager",
+    "claude config",
+    "vscode",
+    "vscode extension",
+    "cursor",
+    "windsurf",
+    "claude code cli",
+    "developer-tools"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeCodeManager",
+          "title": "Claude Code Manager",
+          "icon": "media/icon.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "claudeCodeManagerSecondary",
+          "title": "Claude Code Manager",
+          "icon": "media/icon.svg",
+          "when": "claudeCodeManager:supportsSecondarySidebar"
+        }
+      ]
+    },
+    "views": {
+      "claudeCodeManager": [
+        {
+          "type": "webview",
+          "id": "claudeCodeManager.view",
+          "name": "Claude Code Manager"
+        }
+      ],
+      "claudeCodeManagerSecondary": [
+        {
+          "type": "webview",
+          "id": "claudeCodeManager.secondaryView",
+          "name": "Claude Code Manager",
+          "when": "claudeCodeManager:supportsSecondarySidebar"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeManager.open",
+        "title": "Claude Code Manager: Open"
+      },
+      {
+        "command": "claudeManager.switchAccount",
+        "title": "Claude Code Manager: Switch Account"
+      },
+      {
+        "command": "claudeManager.exportBrain",
+        "title": "Claude Code Manager: Export Brain…"
+      },
+      {
+        "command": "claudeManager.importBrain",
+        "title": "Claude Code Manager: Import Brain…"
+      },
+      {
+        "command": "claudeManager.reload",
+        "title": "Claude Code Manager: Reload"
+      },
+      {
+        "command": "claudeManager.runDiagnostics",
+        "title": "Claude Code Manager: Run Diagnostics"
+      },
+      {
+        "command": "claudeManager.reportIssue",
+        "title": "Claude Code Manager: Report a Problem"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudeManager.open",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      },
+      {
+        "command": "claudeManager.reload",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "focusedView == claudeCodeManager.view || focusedView == claudeCodeManager.secondaryView"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Code Manager",
+      "properties": {
+        "claudeManager.terminal.location": {
+          "type": "string",
+          "default": "editor",
+          "enum": [
+            "editor",
+            "panel"
+          ],
+          "enumDescriptions": [
+            "Open terminals in the editor area (beside current editor)",
+            "Open terminals in the bottom panel"
+          ],
+          "description": "Where to open Claude terminals when resuming sessions."
+        },
+        "claudeManager.terminal.editorPosition": {
+          "type": "string",
+          "default": "beside",
+          "enum": [
+            "beside",
+            "active",
+            "one",
+            "two",
+            "three"
+          ],
+          "enumDescriptions": [
+            "Open beside the current editor",
+            "Open in the active editor group",
+            "Open in the first editor group",
+            "Open in the second editor group",
+            "Open in the third editor group"
+          ],
+          "description": "Which editor group to open the terminal in (only applies when location is 'editor')."
+        },
+        "claudeManager.sessions.defaultFilter": {
+          "type": "string",
+          "default": "recent",
+          "enum": [
+            "recent",
+            "week",
+            "month",
+            "all"
+          ],
+          "enumDescriptions": [
+            "Show top 20 most recent sessions",
+            "Show sessions from the past week",
+            "Show sessions from the past month",
+            "Show all sessions"
+          ],
+          "description": "Default date filter when opening the sessions tab."
+        },
+        "claudeManager.sessions.defaultProject": {
+          "type": "string",
+          "default": "current",
+          "enum": [
+            "current",
+            "all"
+          ],
+          "enumDescriptions": [
+            "Show only sessions from the current workspace",
+            "Show sessions from all projects"
+          ],
+          "description": "Default project filter when opening the sessions tab."
+        },
+        "claudeManager.sessions.restoreCount": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 12,
+          "description": "How many of the most recent sessions the Restore action reopens."
+        },
+        "claudeManager.sessions.restoreWindowMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 120,
+          "description": "No longer used. Restore now reopens a fixed number of recent sessions.",
+          "markdownDeprecationMessage": "Replaced by `#claudeManager.sessions.restoreCount#`. The time-window rule collapsed to a single session whenever your last two sessions were more than the window apart."
+        },
+        "claudeManager.marketplaceSkillsUrl": {
+          "type": "string",
+          "default": "https://github.com/anthropics/claude-code/wiki/Skills",
+          "description": "URL opened by the 'Browse community skills' button on the Skills tab. Override to point at a curated team list."
+        },
+        "claudeManager.marketplaceMcpUrl": {
+          "type": "string",
+          "default": "https://mcp.so",
+          "description": "URL opened by the 'Browse MCP servers' button on the MCP tab. Override to point at a curated team registry."
+        },
+        "claudeManager.density": {
+          "type": "string",
+          "default": "comfortable",
+          "enum": [
+            "comfortable",
+            "quiet"
+          ],
+          "enumDescriptions": [
+            "Separate every list row with a hairline rule",
+            "Drop the row rules and let whitespace and section headings do the separating, like VS Code's own file tree"
+          ],
+          "description": "How list rows in the sidebar are separated. Applies to every tab."
+        },
+        "claudeManager.hiddenTabs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "sessions",
+              "account",
+              "config",
+              "checkpoints",
+              "prompts",
+              "skills",
+              "mcp",
+              "agents",
+              "commands",
+              "hooks",
+              "plugins",
+              "memory"
+            ]
+          },
+          "default": [],
+          "description": "Tab ids to hide from the sidebar, e.g. \"checkpoints\", \"prompts\". Hiding every tab is refused rather than honoured — if this list would hide all of them, it is ignored and every tab shows instead."
+        },
+        "claudeManager.tabOrder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "sessions",
+              "account",
+              "config",
+              "checkpoints",
+              "prompts",
+              "skills",
+              "mcp",
+              "agents",
+              "commands",
+              "hooks",
+              "plugins",
+              "memory"
+            ]
+          },
+          "default": [],
+          "description": "Left-to-right order for the tabs listed here, by id. A tab left out keeps its built-in position and is appended after the ones you listed. Unknown or duplicate ids are ignored, so an id from a removed tab never breaks this list."
+        },
+        "claudeManager.terminal.keepSessionNames": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the session name on terminal tabs Claude Code Manager opens. VS Code hands agent CLIs their own tab title, so a running claude replaces the session name with its title — and with the process name (\"2.1.276\") when it has written none. Turning this on sets terminal.integrated.tabs.allowAgentCliTitle to false and terminal.integrated.tabs.title to ${sequence} in your user settings; turning it off restores what you had. Terminals you open yourself keep following the CLI's title either way.",
+          "scope": "machine"
+        },
+        "claudeManager.sessions.terminalLinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show View instead of Resume for a session that is already running in a terminal, including sessions started outside VS Code. This needs a SessionStart hook in ~/.claude/settings.json that records each session's id and process id locally — Claude Code Manager adds that entry while this is on and removes it when you turn it off. Sessions started from the sidebar are linked to their terminal either way.",
+          "scope": "machine"
+        },
+        "claudeManager.sessions.resumeIn": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "terminal",
+            "extension",
+            "ask"
+          ],
+          "enumDescriptions": [
+            "Resume in the surface the session originated from (extension chat if the session was started there, terminal otherwise)",
+            "Always resume in a terminal (claude --resume)",
+            "Always resume in the Claude Code extension chat tab (requires the official Claude Code extension)",
+            "Ask every time where to resume"
+          ],
+          "description": "Where Open conversation opens saved history. Play / Continue task submits a continuation in a terminal after confirmation. Within the Claude Code extension, chat opens in an editor tab or the Claude Code side bar according to that extension's own `claudeCode.preferredLocation` setting. Fork, Continue, and Restore Workspace always use the terminal since they have no equivalent in the extension chat."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:extension": "node scripts/build-extension.mjs",
+    "build:webview": "node scripts/build-webview.mjs",
+    "build:css": "node scripts/build-css.js",
+    "build": "node scripts/build-extension.mjs && node scripts/build-webview.mjs && node scripts/build-css.js",
+    "watch:extension": "node scripts/build-extension.mjs --watch",
+    "watch:webview": "node scripts/build-webview.mjs --watch",
+    "watch": "node scripts/build-extension.mjs --watch & node scripts/build-webview.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "size": "size-limit",
+    "release": "pnpm test && pnpm run build && node -e \"require('fs').readdirSync('dist').filter(f=>f.endsWith('.vsix')).forEach(f=>require('fs').unlinkSync('dist/'+f))\" && pnpm dlx @vscode/vsce package --no-dependencies -o dist/",
+    "release:patch": "pnpm version patch --no-git-tag-version && pnpm run release",
+    "release:minor": "pnpm version minor --no-git-tag-version && pnpm run release",
+    "release:major": "pnpm version major --no-git-tag-version && pnpm run release",
+    "publish:openvsx": "pnpm dlx ovsx publish dist/*.vsix -p",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "compile:integration": "tsc -p tsconfig.integration.json",
+    "pretest:integration": "pnpm run build && pnpm run compile:integration",
+    "test:integration": "node ./out/integration/runTest.js",
+    "perf:fixtures": "node scripts/perf/generate-fixtures.mjs",
+    "perf:measure": "node scripts/perf/measure.mjs",
+    "package:personal": "npm run build && npx --yes @vscode/vsce@3.6.2 package --no-dependencies --allow-missing-repository --no-rewrite-relative-links -o dist/claude-manager-personal-2.15.5.vsix"
+  },
+  "size-limit": [
+    {
+      "path": "dist/extension.js",
+      "limit": "400 KB"
+    },
+    {
+      "path": "dist/webview/main.js",
+      "limit": "60 KB"
+    },
+    {
+      "name": "webview feature chunks (sum; ~45% is preact + signals + valibot)",
+      "path": "dist/webview/chunks/*.js",
+      "limit": "70 KB"
+    },
+    {
+      "path": "dist/webview/styles.css",
+      "limit": "50 KB"
+    }
+  ],
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
+    "@size-limit/file": "^12.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/preact": "^3.2.4",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^25.5.2",
+    "@types/vscode": "1.90.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.28.1",
+    "glob": "^13.0.6",
+    "happy-dom": "^20.11.1",
+    "mocha": "^11.8.0",
+    "sharp": "^0.35.3",
+    "size-limit": "^12.1.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.0",
+    "clsx": "^2.1.1",
+    "preact": "^10.29.8",
+    "valibot": "^1.4.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "This extension can change account credentials and run local commands."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  }
+}

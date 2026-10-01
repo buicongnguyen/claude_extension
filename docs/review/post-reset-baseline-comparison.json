@@ -1,0 +1,8 @@
+{
+  "tests": 3873,
+  "passed": 3854,
+  "failed": 19,
+  "files": 293,
+  "same_failures_as_2_15_4": true,
+  "new_failures": []
+}

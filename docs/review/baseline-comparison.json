@@ -1,0 +1,11 @@
+{
+  "tests": 3821,
+  "passed": 3802,
+  "failed": 19,
+  "files": 293,
+  "failedFiles": 6,
+  "baselineFailures": 19,
+  "sameFailureIdentities": true,
+  "newFailures": [],
+  "resolvedBaselineFailures": []
+}

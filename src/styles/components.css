@@ -1,0 +1,1319 @@
+/* ============================================================================
+   Claude Session Manager — Component Styles
+   Buttons, tags, search, dropdown, date chips, context menu
+   ============================================================================ */
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Shared <EmptyState> — the one "nothing here yet" surface.
+
+   Centred icon + title + description + optional action, matching VS Code's own
+   empty-view treatment: muted glyph, quiet copy, generous breathing room. The
+   icon is dimmed so it reads as structure, not a control.
+
+   This replaced five private copies (.cmd-empty, .hook-empty, .agent-empty,
+   .mcp-empty, .acct-empty) plus a bare `.empty` div and a string-building
+   renderEmptyState() helper. They disagreed on type size, alignment and
+   spacing, so which tab you emptied decided how the message looked.
+
+   The 28px inset (2×--space-2xl) is shared with `.loading` so a view that
+   flips between loading and empty does not jump.
+   ────────────────────────────────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-sm);
+  padding: calc(var(--space-2xl) * 2) var(--space-2xl);
+  color: var(--fg-dim);
+  font-size: var(--fs-base);
+}
+.empty-state > svg,
+.empty-state > .icon {
+  /* The quiet foreground is the whole dimming. This glyph is the only mark
+     on an otherwise blank panel, and the `opacity: 0.55` that used to sit on
+     top of it sank the illustration below the text it introduces. */
+  color: var(--fg-dim);
+  margin-bottom: var(--space-xs);
+}
+.empty-state-title {
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--fg);
+}
+.empty-state-desc {
+  color: var(--fg-dim);
+  line-height: 1.5;
+  /* Prose measure, not a box width: these descriptions explain a file format
+     and read as a sentence, so they cap by character count. */
+  max-width: 42ch;
+}
+/* Most of these descriptions name a path or a key mid-sentence. The chip has
+   to sit on the text baseline without stretching the line box. */
+.empty-state-desc code {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  padding: 1px var(--space-xs);
+  border-radius: var(--radius-sm);
+}
+
+/* COMPACT — a section inside a populated panel is empty (Account's Profile and
+   Usage blocks, a permission list), rather than the whole view. Sits in the
+   flow of the section instead of taking over the panel: no icon, tighter
+   inset, smaller title. */
+.empty-state--compact {
+  padding: var(--space-lg) 0;
+  gap: var(--space-xs);
+}
+.empty-state--compact .empty-state-title {
+  font-size: var(--fs-base);
+}
+.empty-state--compact .empty-state-desc {
+  font-size: var(--fs-sm);
+}
+
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  min-width: 320px;
+  max-width: 80vw;
+  box-shadow: 0 8px 32px var(--shadow);
+}
+.modal-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  margin-bottom: var(--space-xl);
+}
+
+/* Base box for the primary/secondary variants; role colours + borders are
+   applied in components-native.css (the Button-variant section). */
+.btn-primary,
+.btn-secondary {
+  padding: 0 var(--pad-control-x);
+  height: var(--h-control);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.list-item {
+  padding: var(--space-md) var(--space-xl);
+  cursor: pointer;
+  border-radius: var(--radius);
+  /* Subtle, native hover fade — VS Code rows ease their highlight in
+     rather than snapping. Background only; respects reduced-motion via
+     the global rule in base.css. */
+  transition: background var(--transition-control);
+}
+.list-item:hover { background: var(--bg-hover); }
+.list-item.active { background: var(--bg-active); color: var(--bg-active-fg); }
+/* Keyboard focus on a focusable row — inset ring in VS Code's list focus
+   colour so it lands inside the row edge like the native tree. */
+.list-item:focus-visible {
+  outline: 1px solid var(--list-focus);
+  outline-offset: -1px;
+}
+
+/* Result-count caption shown above a feature's grouped list ("N skills",
+   "N commands", …). One shared class across all features. The 2xl left inset
+   aligns the caption with the list rows below it (same inset as group labels). */
+.list-count {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  padding: var(--space-xs) var(--space-2xl) var(--space-xs);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Section heading inside a grouped list ("TODAY", "PROJECT", "PRE TOOL USE", …).
+
+   One block, five class names. Sessions, Skills and Agents render
+   `.group-label`; Commands and Hooks render `.cmd-group-label` /
+   `.hook-group-label`; MCP renders `.mcp-group-label`. The markup differs
+   because each feature names its own rows, but the heading is one component,
+   and it used to be declared four separate times — in sessions.css,
+   features.css, mcp.css and agents.css — each copy carrying a comment pointing
+   at another copy as the reference. Four owners means four chances to drift.
+
+   Rhythm: --space-lg above (matching the account/config .section-header
+   top inset) and --space-sm below to the first row, so every list heading in
+   the extension sits on one cross-tab cadence.
+
+   Feature files may still override this — they load later — but they now
+   override a definition instead of restating one. MCP's windowed list does
+   exactly that to pin a fixed row height (see mcp.css).
+   ────────────────────────────────────────────────────────────────────────────── */
+.group-label,
+.cmd-group-label,
+.hook-group-label,
+.mcp-group-label {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-section);
+  /* Banded, like the session list's own headings (.session-group-header in
+     sessions.css). Uppercase bold text alone did not separate a section from
+     its rows: every row already carries a hairline, so the heading read as one
+     more row. The recessed surface plus a rule above and below is what makes
+     the sections findable while scanning, and every tab's list uses it so the
+     panels stay recognisably the same object. */
+  background: var(--role-track-bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-sm) var(--space-2xl);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+/* The first heading's top rule would double whatever edge the list already
+   has above it. */
+.group-label:first-child,
+.cmd-group-label:first-child,
+.hook-group-label:first-child,
+.mcp-group-label:first-child {
+  border-top: 0;
+}
+
+/* Nested sub-group heading under a scope header — shown only when a skills
+   directory contains subfolders. Lower visual weight than the group label
+   above, so the scope (Project / Global) still reads as the primary grouping
+   and the folder path reads as context. */
+.group-sublabel {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  padding: var(--space-md) var(--space-2xl) 4px;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.2px;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Section — a titled block inside a scrolling panel, optionally collapsible.
+   Backs the shared <Section> / <SectionHeader>.
+
+   These rules lived in account.css as `.acct-section*`, and the Config tab
+   rendered those class names across the feature boundary because there was no
+   shared primitive to reach for. Config is not an account; the name is neutral
+   now and both tabs use the same component.
+   ────────────────────────────────────────────────────────────────────────── */
+.section {
+  border-bottom: 1px solid var(--vscode-panel-border, var(--border, rgba(127,127,127,0.18)));
+  /* Section separation comes from the header's top padding + the body's bottom
+     padding around the divider (~22px). Extra padding on the section itself
+     stacks into an oversized gap above the next header. */
+  padding-bottom: var(--space-sm);
+}
+.section:last-child { border-bottom: none; }
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-lg) var(--space-2xl);
+  /* Fixed height, whatever the header happens to contain.
+     A trailing action (Usage's export, Quota's refresh) is a control and is
+     taller than the title text, so a header that has one was 52px and one that
+     did not was 34px. Worse, Usage renders its action only while expanded — so
+     collapsing the section shrank its own header by 18px and slid the label
+     9px UP the panel, which read as the whole section jumping. The height no
+     longer depends on the contents, so nothing moves and every section heading
+     in the panel lines up on the same rhythm. */
+  min-height: calc(var(--h-control-sm) + 2 * var(--space-lg));
+  box-sizing: border-box;
+  margin: 0;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  transition: background var(--transition-control);
+}
+/* Trailing actions sit inside that fixed height rather than setting it. The
+   full --h-control box would push the header past the min-height above and
+   bring the whole problem back. */
+.section-header .btn-icon {
+  width: var(--h-control-sm);
+  height: var(--h-control-sm);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Only a collapsible header is interactive — it is the one that gets
+   role="button" and a tabindex, so the affordances hang off that. */
+.section-header[role="button"] { cursor: pointer; user-select: none; }
+.section-header[role="button"]:hover .section-title,
+.section-header[role="button"]:hover .section-chevron {
+  color: var(--fg);
+}
+.section-header:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.section-chevron,
+.section-icon {
+  display: flex;
+  align-items: center;
+  color: var(--fg-dim);
+}
+.section-chevron { transition: transform var(--transition-control); }
+.section-chevron.collapsed { transform: rotate(-90deg); }
+
+.section-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-section);
+  margin: 0;
+  /* Pushes any header action to the far right. */
+  flex: 1;
+}
+
+.section-body {
+  padding: 0 var(--space-2xl) var(--space-xl);
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Field — a labelled control with an explanatory line under it. Backs the
+   shared <Field>. Same history as Section: named `.acct-*`, used by Config.
+   ────────────────────────────────────────────────────────────────────────── */
+.field {
+  margin-bottom: var(--space-md);
+  position: relative;
+}
+.field-label {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  margin-bottom: var(--space-xs);
+}
+.field-hint {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Actions row — the button row that closes a Section.
+
+   Equal-width columns wide enough for the longest label (150px, so "Open
+   settings.json" / "Extension settings" never crop), packing 2-up when the
+   panel is wide and collapsing to 1-up only when genuinely narrow. The shared
+   `… > .btn` override below disables the ellipsis clip so labels show in full.
+   ────────────────────────────────────────────────────────────────────────── */
+.actions-row {
+  display: grid;
+  /* 150px needed 306px for two columns, but a section body insets the panel by
+     --space-2xl each side, leaving ~296px at the default sidebar width — so
+     every action row collapsed to one full-width button per line. 120px puts
+     two side by side there and still wraps before a label is squeezed. */
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+/* A <Segmented> used INSIDE a section body. The control's own rule insets it
+   from the panel edge, but a section body already applies that same --space-2xl
+   padding, so the inherited margin double-insets it and leaves it narrower than
+   the search box and rows beside it. */
+.section-body > .scope-filter,
+.section-body > .vsc-segmented {
+  margin-left: 0;
+  margin-right: 0;
+  margin-top: 0;
+  margin-bottom: var(--space-lg);
+}
+
+/* Inline code chips inside field hints and section bodies. Without horizontal
+   padding the `<code>` background hugs the text flush against its edges, which
+   reads as cramped next to surrounding prose. */
+.field-hint code,
+.section-body p code,
+.section-body code:not(.cfg-code) {
+  display: inline-block;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  line-height: 1.4;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Quick Actions Bar
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* Session-launch toolbar: one primary action that takes the room it needs,
+   then fixed-width icon affordances. This was a `repeat(auto-fit, minmax(135px,
+   1fr))` grid of six equal buttons, which wrapped to two rows at the default
+   sidebar width and three at 280px — a third of the panel spent before the
+   first session row. Five of the six now live in the split menu.
+
+   The left/right inset matches the list rows and the search box so the panel
+   reads as one column. */
+.actions-bar {
+  display: flex;
+  align-items: center;
+  /* Same gap as .search-row. Both rows are "one flexible control plus two
+     icon buttons", so an unequal gap left the primary button and the search
+     field with different right edges — 4px of misalignment between two
+     stacked controls that are meant to read as one column. */
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-2xl) var(--space-xs);
+  flex-shrink: 0;
+}
+/* The primary takes the slack; the icons stay their natural size. */
+.actions-new { flex: 1; min-width: 0; }
+.actions-more { display: flex; flex-shrink: 0; }
+
+
+/* ── Active filter chips ───────────────────────────────────────────────────
+   One chip per filter that is actually narrowing the list. The row renders
+   nothing when nothing is filtered, which is the common case, and it is the
+   only place that answers "why am I not seeing that session?" at a glance. */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-2xl) 0;
+  flex-shrink: 0;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  height: 22px;
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  border-radius: 11px;
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  font-size: var(--fs-sm);
+  max-width: 100%;
+  min-width: 0;
+}
+.filter-chip .icon { opacity: 0.7; flex-shrink: 0; }
+.filter-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.filter-chip-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* A 16px target inside a 22px chip. Smaller than the 24px minimum elsewhere
+     because the chip itself is the affordance and the × is its detail — the
+     row's own controls stay full size. */
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity var(--transition-control), background var(--transition-control);
+}
+.filter-chip-clear:hover { opacity: 1; background: var(--role-ghost-hover-bg); }
+.filter-chip-clear:focus-visible { outline: var(--focus-ring); outline-offset: 1px; opacity: 1; }
+.filter-chip-clear-all {
+  font-size: var(--fs-sm);
+  color: var(--link, var(--accent));
+  cursor: pointer;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+}
+.filter-chip-clear-all:hover { text-decoration: underline; }
+.filter-chip-clear-all:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+
+/* The pickers, revealed by the toolbar's filter toggle. */
+.filter-panel { flex-shrink: 0; }
+/* The toggle stays lit while its panel is open, so the row below is never
+   unexplained chrome. */
+.search-side-btn.is-open {
+  background: var(--role-ghost-active-bg);
+  color: var(--role-text-primary);
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Dropdown
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.filter-row {
+  display: flex;
+  gap: var(--space-sm);
+  /* Match the list-row inset so the dropdowns line up with rows + search. */
+  padding: var(--space-sm) var(--space-2xl);
+  position: relative;
+  flex-shrink: 0;
+}
+/*
+ * Shared <Dropdown> (src/webview/shared/ui/Dropdown/Dropdown.tsx) — a custom
+ * trigger button + the shared <Menu> popup. The wrapper is a full-width block so
+ * the trigger fills its container (matching the search field); the trigger box,
+ * label, chevron, and popup width parity are styled in components-native.css.
+ */
+.filter-row > .vsc-dropdown {
+  flex: 1;
+  min-width: 0;
+}
+.vsc-dropdown {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+/* Optional leading glyph on the closed trigger (e.g. the branch git-branch
+   icon). Muted, non-interactive. */
+.vsc-dropdown-leading {
+  display: inline-flex;
+  align-items: center;
+  color: var(--role-text-secondary);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Scope Filter / Date range — panel-edge placement only.
+
+   Both are now the shared <Segmented> control (the `.vsc-segmented` track look
+   lives in components-native.css). `.scope-filter` is applied DIRECTLY to the
+   `.vsc-segmented` element, so its edge insets use MARGIN (not padding, which
+   would fight the track's internal padding) to align the control with the
+   search box and list rows. `.date-chips` is a wrapper element, so it can use
+   padding. The selected-state visuals (no longer primary blue) come entirely
+   from `.vsc-segmented`.
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.scope-filter {
+  /* Same --space-sm vertical rhythm as the sibling control rows (search-row /
+     filter-row / date-chips / list-header) so the scope segmented sits on the
+     unified control-row spacing on every feature tab. */
+  margin: var(--space-sm) var(--space-2xl) 0;
+  flex-shrink: 0;
+}
+
+.date-chips {
+  padding: var(--space-sm) var(--space-2xl);
+  flex-shrink: 0;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Tags
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Chip geometry — the shared box behind every small inline label.
+
+   Three of these grew up separately and ended up almost, but not quite, the
+   same: `.vsc-badge` (scope/type/count chips) sized itself by padding alone
+   with no fixed height, `.tag` (branch, worktree, temp) pinned 18px with
+   zero vertical padding, and `.hook-matcher` pinned 18px but set its text a
+   point larger than both. Sitting side by side in one row — a matcher chip
+   beside a scope chip — they read as a wobble rather than a set.
+
+   One box here; each class below keeps only what it genuinely needs to
+   differ by (a monospace face, a different clamp width, a semantic fill).
+   ────────────────────────────────────────────────────────────────────────── */
+.vsc-badge,
+.tag,
+.hook-matcher,
+.agent-model-badge {
+  display: inline-flex;
+  align-items: center;
+  /* Chips may carry a leading glyph (the branch tag, the worktree tag), so the
+     gap belongs to the shared geometry rather than to each chip that adds one. */
+  gap: var(--space-xs);
+  height: 18px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* A chip is a label on a row, never the thing that decides the row's
+     width — it yields before the name it annotates does. */
+  flex-shrink: 0;
+}
+
+/*
+ * Branch tag — the neutral-badge token pair. A semi-transparent gray that
+ * lands as a mid-tone overlay on any background (light or dark) with --fg
+ * text, guaranteed readable. This is the pattern the whole neutral-badge
+ * system was standardised on (over the low-contrast --badge-* pair).
+ */
+/* The label inside a chip that also carries a glyph. The chip is a flex
+   container, so its bare text would be an ANONYMOUS flex item — and
+   `text-overflow: ellipsis` does not apply to one, which makes a too-long
+   branch or project clip hard mid-word instead of ellipsising. The full value
+   is always on the chip's `title`, so the tooltip has it either way. */
+.tag-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Pill, not block. A chip annotates the row it sits on, so a hairline drawn
+   from its OWN colour defines its edge while the fill behind it stays light —
+   a flat filled block at the same tint has to be dark enough to see, which
+   made it compete with the session title.
+
+   The border is `currentColor`, so every variant below gets a matching edge
+   for free by setting `color` alone, and none of them can drift out of step
+   with its own fill.
+
+   `box-sizing` is load-bearing: the shared chip box fixes height at 18px, and
+   without it the new 1px border would push these two pixels taller than the
+   badges they sit beside.
+
+   The UI font, not mono. The base used to set --mono and then every variant
+   below — folder, temp, worktree — overrode it straight back to `inherit`,
+   which is the shape of a default nobody wanted: only the plain branch chip
+   ever rendered in mono, so beside the folder chip it sat visibly larger
+   (mono carries a taller x-height and a wider advance at the same px) and fit
+   fewer characters before ellipsising. These chips hold branch names, skill
+   keywords and folder names — labels, not code. Anything that genuinely needs
+   a fixed pitch can opt in. */
+.tag {
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, var(--badge-neutral-bg) 55%, transparent);
+  color: var(--badge-neutral-fg);
+  max-width: 120px;
+}
+/* Project chip — the quietest member of the set. It names the row's ambient
+   context rather than anything exceptional about the row, and in the default
+   "current project" scope it is the SAME string on every row. A filled pill on
+   a constant would outweigh the branch beside it, which is the chip that
+   actually varies. So it takes the pill's geometry and edge but no fill, which
+   keeps it legibly part of the same system while sitting a rank below. */
+.tag.folder {
+  background: none;
+  border-color: color-mix(in srgb, currentColor 16%, transparent);
+  color: var(--fg-dim);
+}
+/* Temp (ephemeral) session marker — a quiet amber pill so it reads as a
+   transient state, not an error. */
+.tag.tag-temp {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #d49a00) 12%, transparent);
+  color: var(--vscode-editorWarning-foreground, #d49a00);
+  border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #d49a00) 40%, transparent);
+  flex: none;
+}
+
+/* Worktree badge — a compact pill naming the git worktree a session ran in.
+   The leading icon distinguishes Claude-created (bot) from user-created
+   (branch) worktrees; the two spans layer the short name + branch. Reuses the
+   .tag base box (see above) for sizing/ellipsis. */
+.tag.tag-wt {
+  gap: var(--space-xs);
+  max-width: 200px;
+}
+/* One owner for chip glyph size. At 12px against --fs-xs text the icon was
+   larger than the label it prefixes, so it read as the chip's subject rather
+   than its marker. 10px sits just under the cap height, which is where a
+   leading glyph belongs.
+
+   Sized here rather than at each call site so a chip added elsewhere cannot
+   drift out of step — the `size` prop still writes the SVG's own attributes,
+   and this overrides them for every chip at once. */
+.tag .icon {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  /* A leading glyph marks the chip; it is not the chip's content. Holding it
+     just under full strength stops the denser icons — git-branch is two rings,
+     a line and an arc where folder is a single outline — from out-weighing the
+     label beside them at the same box size. */
+  opacity: 0.75;
+}
+.tag-wt__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-wt__branch {
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-wt__branch::before {
+  content: "·";
+  margin: 0 var(--space-xs);
+  opacity: 0.6;
+}
+/* Colour is spent only where it means something. A Claude-created worktree is
+   the extension's own artefact, so it carries the accent; a user-created one
+   is ordinary and stays neutral, already distinguished by its branch glyph
+   against the bot glyph. Tinting the plain branch chip as well was tempting
+   and rejected — a colour every row wears is decoration, and it would have put
+   the chip back into competition with the title it annotates. */
+.tag.tag-wt--claude {
+  background: color-mix(in srgb, var(--accent, #3794ff) 11%, transparent);
+  color: var(--accent, #3794ff);
+  border-color: color-mix(in srgb, var(--accent, #3794ff) 38%, transparent);
+}
+.tag.tag-wt--user {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--fg-dim);
+}
+/* Locked = git holds a lock (session likely running). Now that every chip has
+   an edge, the ring is that edge drawn firmly rather than a second inset one
+   stacked inside it. */
+.tag.tag-wt--locked {
+  border-color: color-mix(in srgb, currentColor 65%, transparent);
+}
+/* Removed from disk: dim + strike the name so it reads as gone. */
+.tag.tag-wt--missing {
+  opacity: 0.55;
+}
+.tag.tag-wt--missing .tag-wt__name {
+  text-decoration: line-through;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Buttons
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.btn {
+  height: var(--h-control);
+  padding: 0 var(--pad-control-x);
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  /* Clip content that doesn't fit inside the button box. Without
+     this, inline-flex buttons inside a grid with equal 1fr columns
+     let long labels spill outside the background, which reads as
+     overlapping the neighbour button. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  /* Subtle native hover/active fade on colour + fill. Global
+     reduced-motion rule neutralises it for users who opt out. */
+  transition: background var(--transition-control), color var(--transition-control), border-color var(--transition-control);
+}
+/* Inline SVG icons shouldn't shrink when text ellipsizes — keeps
+   the icon visible next to whatever label text survives. */
+.btn > svg { flex-shrink: 0; }
+.btn:hover                   { color: var(--fg); }
+.btn.primary                 { background: var(--role-primary-bg); color: var(--role-primary-fg); }
+.btn.primary:hover           { background: var(--role-primary-hover-bg); }
+.btn.green                   { color: var(--green); }
+.btn.green:hover             { background: var(--green-bg); }
+/* `.btn.del` is the legacy danger modifier — wired to the danger role in
+   components-native.css alongside `.btn-danger` so both look identical. */
+
+/* Back affordance — the single <BackButton> style for every detail/form view.
+   A chromeless icon+label link (no fill/border/height chrome) that reads as
+   inline navigation. Lives in the shared layer, not a feature file, because it
+   is one component used across all features; the asymmetric padding seats it at
+   the top-left of the .panel. */
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-base);
+  cursor: pointer;
+  padding: var(--space-lg) var(--space-2xl) var(--space-sm);
+  font-family: inherit;
+  flex-shrink: 0;
+}
+.back-btn:hover { color: var(--fg); }
+.back-btn > svg { flex-shrink: 0; }
+
+/* Action-button rows that size to CONTENT and wrap, never crop.
+   ────────────────────────────────────────────────────────────────────────────
+   Clusters of <Button> actions (config/account/detail views) lay out with
+   `display: flex; flex-wrap: wrap` and content-width buttons, each row class
+   adding only its own padding/margin. A previous iteration used
+   `display: grid; minmax(N, 1fr)` to pack buttons two-up on narrow panels — but
+   the equal 1fr columns plus `.btn`'s `overflow: hidden; text-overflow: ellipsis`
+   cropped longer labels ("Open settings.js…", "Extension setting…") whenever the
+   column was narrower than the label. A cropped action label is unacceptable.
+
+   Each row therefore re-enables full labels on its buttons with the shared
+   `> .btn` override below: flex-wrap content-width packing keeps full labels,
+   buttons end up different widths (native + fine), and a button too wide for the
+   panel even alone takes the full row. The `.btn` base keeps its ellipsis clip
+   for OTHER layouts (list rows, grid columns elsewhere).
+
+   The selector list groups every action-row cluster so the override lives once. */
+.actions-row > .btn,
+.d-actions > .btn,
+.agent-detail-actions > .btn,
+.cmd-detail-actions > .btn {
+  overflow: visible;
+  text-overflow: clip;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Read-only command / path display rendered as a code block, NOT a fake input.
+   ────────────────────────────────────────────────────────────────────────────
+   Used for values the user can SEE but does not EDIT in place (e.g. the Config
+   status-line command). Visually distinct from <TextField>: a subtle code
+   surface, monospace, no input border / focus ring, default cursor. Long values
+   stay on one line and scroll horizontally so a path never wraps mid-token; pair
+   with a `title` attribute carrying the full value for hover discovery. */
+.code-readonly {
+  display: block;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--vscode-textCodeBlock-background,
+    var(--vscode-textBlockQuote-background, var(--bg-hover)));
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  /* No input border/focus chrome; reading text, not editing. */
+  border: none;
+  cursor: default;
+  /* One line; scroll long commands instead of wrapping mid-path. */
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* Multi-line read-only code block (command templates, system prompts) — was
+   duplicated byte-for-byte as `.agent-detail-pre` and `.cmd-detail-pre`; one
+   shared class now. Distinct from `.code-readonly` above (single-line, no
+   border) — this wraps and has a bordered box, for longer content. */
+.d-pre {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  /* Pair with the input foreground so text always contrasts its input-bg
+     surface (sideBar --fg can come from a different theme group). */
+  color: var(--input-fg, var(--fg));
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-xl);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 0;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Context Menu
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.ctx-menu {
+  position: fixed;
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) 0;
+  min-width: 180px;
+  z-index: 1000;
+  box-shadow: 0 4px 16px var(--shadow);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-2xl);
+  font-size: var(--fs-base);
+  color: var(--menu-fg);
+  cursor: pointer;
+}
+/* Neutral-row hover lives in the native layer (`.ctx-menu .ctx-item:hover` in
+   components-native.css, using --vscode-menu-selectionBackground) which wins on
+   specificity; the old white `--overlay-hover` rule here was dead + backwards
+   on light themes. Only the danger-row hover, unique to this legacy block,
+   remains. */
+.ctx-item.del                { color: var(--red); }
+.ctx-item.del:hover          { background: var(--red-bg); color: var(--red); }
+
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: var(--space-xs) var(--space-lg);
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Tab Bar — see tabs.css.
+
+   The tab strip, its buttons, the icon/label swap and the content panes all
+   live in ONE file now (src/styles/tabs.css). They used to be defined here
+   AND there: tabs.css loads later, so its `.tab-btn` padding won over this
+   block's `width: 32px` box and squeezed the icon into 8px of content. Two
+   owners for one component is how that happens; there is one owner now.
+   ────────────────────────────────────────────────────────────────────────────── */
+
+
+
+/* Windowed list (VirtualList). It MUST be the scroll container itself: the
+   virtualizer reads scrollTop/clientHeight off this element and the inner
+   `.virtual-list-spacer` reserves the full content height. Without this rule
+   the element collapsed to a plain block, the spacer pushed the panel to
+   overflow instead, scrollTop stayed 0, and only the first window rendered —
+   leaving a tall empty gap below it. `flex: 1 1 auto; min-height: 0` fills a
+   flex parent (the `.panel`, or the `.list` wrapper which is now a flex
+   column) and lets it shrink so the inner spacer scrolls inside, not out. */
+.virtual-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.virtual-list-spacer {
+  width: 100%;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   List Item — Copy Button (shared by every list tab)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.item-copy-btn {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.item-copy-btn:hover            { opacity: 1; color: var(--fg); background: var(--bg-hover); }
+.item-copy-btn.copied           { opacity: 1; color: var(--green); }
+
+/* ── Row actions appear on the row you are pointing at ─────────────────
+ * Sessions and Hooks reveal their row actions on hover; Skills, Commands and
+ * MCP printed theirs at 40% opacity on every row, so a list of twenty showed
+ * twenty half-lit buttons sitting between each name and its scope chip. Three
+ * tabs behaving one way and two the other is the kind of difference nobody can
+ * justify but everybody feels.
+ *
+ * Hidden by opacity rather than display, so the row's layout does not shift
+ * when the pointer arrives. `:focus-within` keeps them reachable by keyboard,
+ * and `.copied` keeps the confirmation visible after the pointer leaves.
+ *
+ * `.list-item` is here so the list is not purely a roll-call of feature row
+ * classes. Every row built on the shared <ListItem> carries it, so a new tab
+ * is covered on arrival — the Plugins tab was not, and its copy button was
+ * invisible on every row until someone noticed. The feature classes below
+ * stay for the rows that predate <ListItem> and set their own class. */
+.item-copy-btn,
+.item-chat-btn {
+  opacity: 0;
+  transition: opacity var(--transition-control);
+}
+.list-item:hover .item-copy-btn,
+.list-item:hover .item-chat-btn,
+.item:hover .item-copy-btn,
+.item:hover .item-chat-btn,
+.cmd-item:hover .item-copy-btn,
+.cmd-item:hover .item-chat-btn,
+.mcp-item:hover .item-copy-btn,
+.list-item:focus-within .item-copy-btn,
+.list-item:focus-within .item-chat-btn,
+.item:focus-within .item-copy-btn,
+.item:focus-within .item-chat-btn,
+.cmd-item:focus-within .item-copy-btn,
+.cmd-item:focus-within .item-chat-btn,
+.mcp-item:focus-within .item-copy-btn,
+.item-copy-btn:focus-visible,
+.item-chat-btn:focus-visible,
+.item-copy-btn.copied {
+  opacity: 1;
+}
+
+/*
+ * Launch-in-chat button — same layout tokens as .item-copy-btn so the
+ * two buttons sit flush in a row. Only rendered when the Claude Code
+ * extension is installed; the accent colour is the same muted fg so it
+ * doesn't pull focus away from the command name.
+ */
+.item-chat-btn {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.item-chat-btn:hover { color: var(--fg); background: var(--bg-hover); }
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Feature Search (shared)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  /* Inset to --space-2xl so the search field's left edge lines up with the
+     list-row text below it (rows use the same inset), the way VS Code's
+     filter box aligns to its tree. */
+  margin: var(--space-sm) var(--space-2xl);
+  flex-shrink: 0;
+}
+
+/* Trailing affordance beside the search box (refresh / browse). Rendered as a
+   shared icon <Button>, so the chromeless `.btn-icon` look applies; this rule
+   only pins it to the unified square control size so it lines up with the
+   search field height. */
+.search-side-btn {
+  width: var(--h-control);
+  height: var(--h-control);
+  flex-shrink: 0;
+}
+
+/* Inline "scanning transcripts" spinner shown between the search field and the
+   refresh button while a host full-text scan is in flight. Metadata matches
+   render instantly; this signals that more (transcript) matches may still land. */
+.search-spinner {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--role-text-secondary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: search-spinner-spin 700ms linear infinite;
+}
+@keyframes search-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+/* Inline note shown in detail panels for read-only items (plugin-
+   sourced hooks, MCP servers, etc.) — explains why the usual
+   toggle/delete controls are missing. */
+.hook-readonly-note,
+.mcp-readonly-note,
+.skill-readonly-note {
+  font-size: var(--fs-xs);
+  color: var(--role-text-secondary);
+  font-style: italic;
+  align-self: center;
+}
+.hook-readonly-note code,
+.mcp-readonly-note code,
+.skill-readonly-note code {
+  font-style: normal;
+}
+
+/* Compact badge variant for list rows where the full note is too
+   long; flags an item as not editable from the sidebar. Neutral badge — a
+   read-only item isn't disabled, so it takes the secondary text colour. */
+.mcp-readonly-badge {
+  font-size: var(--fs-xs);
+  padding: 1px var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: var(--badge-neutral-bg);
+  color: var(--role-text-secondary);
+  font-weight: 500;
+}
+
+
+
+/* Shared <ErrorBanner> - warning strip above a feature list surfacing
+   config parse failures (malformed settings.json / .mcp.json). Uses the
+   editor warning palette so it reads as "degraded, not broken": the
+   list below still renders whatever parsed. */
+.error-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  /* Match .search-row's inset so the banner aligns with the content below. */
+  margin: var(--space-sm) var(--space-2xl);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.1));
+  color: var(--fg);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.error-banner__item {
+  word-break: break-word;
+}
+
+
+/* Progressive disclosure for a long list — backs <ShowMore>. A link, not a
+   button: it reveals more of what you are already reading rather than acting
+   on anything, and a filled control here would compete with the real actions
+   in the same section. */
+.show-more {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--vscode-textLink-foreground, var(--link));
+  cursor: pointer;
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+}
+.show-more:hover { text-decoration: underline; }
+.show-more:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Stat tiles — a figure with its label, in a tile. Backs <StatTile>.
+
+   Two columns, fixed. `auto-fit` picked whatever count the sidebar allowed,
+   which at a typical width was three, orphaning a fourth tile on a row of its
+   own. Four across fails harder: at 340px each figure gets ~75px, and
+   "397.2k" under the word "tokens" does not fit in 75px.
+   ────────────────────────────────────────────────────────────────────────── */
+.stat-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* Dividers BETWEEN the figures, and no box around them. A filled tile, or even
+   an outer border, draws a container the figures do not need — they are four
+   readings of one session, not four separate objects. So each cell rules its
+   own right and bottom edge and the outer edges are left open, which lets the
+   block sit in the page instead of on it. */
+.stat-tile {
+  padding: var(--space-md) var(--space-lg) var(--space-md) 0;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+/* Right column has nothing to its right; bottom row nothing below. */
+.stat-tile:nth-child(2n) { border-right: none; padding-left: var(--space-lg); }
+.stat-tile:nth-last-child(-n + 2):nth-child(2n + 1),
+.stat-tile:last-child { border-bottom: none; }
+/* An odd count would leave the last cell empty — a divider around nothing. */
+.stat-tile:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  border-right: none;
+}
+.stat-tile-value {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg);
+  /* Figures line up column to column, and a changing number does not shift
+     its own label. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stat-tile-label {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  margin-top: 1px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Command palette — one search over every tab (Cmd/Ctrl+K).
+
+   Layered over the panel rather than inside it, so it works from any tab
+   without the tab having to know about it.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  justify-content: center;
+  /* Anchored near the top rather than centred: the list grows downward, so a
+     centred box would shift under the reader as results narrow. */
+  padding: 48px var(--space-xl) var(--space-xl);
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--menu-bg, var(--input-bg));
+  color: var(--menu-fg, var(--fg));
+  border: 1px solid var(--menu-border, var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px -12px var(--shadow);
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-xl);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.palette-input-row .icon { color: var(--fg-dim); flex-shrink: 0; }
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+.palette-input::placeholder { color: var(--fg-dim); }
+
+.palette-list {
+  overflow-y: auto;
+  padding: var(--space-xs) 0;
+  min-height: 0;
+}
+
+.palette-group {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-dim);
+  padding: var(--space-md) var(--space-xl) var(--space-xs);
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-xl);
+  cursor: pointer;
+  min-width: 0;
+}
+/* Hover and keyboard share one highlight: the pointer moves the cursor rather
+   than competing with it, so there is never a second "which one is selected?". */
+.palette-item.active { background: var(--bg-active); color: var(--bg-active-fg); }
+.palette-item-icon { display: flex; color: var(--fg-dim); flex-shrink: 0; width: 15px; }
+.palette-item.active .palette-item-icon { color: inherit; }
+.palette-item-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.palette-item-title {
+  font-size: var(--fs-base);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-item-sub {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-item.active .palette-item-sub { color: inherit; opacity: 0.72; }
+.palette-item-hint {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.palette-item.active .palette-item-hint { color: inherit; opacity: 0.72; }
+
+.palette-empty {
+  padding: var(--space-2xl) var(--space-xl);
+  text-align: center;
+  font-size: var(--fs-base);
+  color: var(--fg-dim);
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Tooltip — the panel's own hover label, drawn by <TooltipLayer> in place of
+   the host OS tooltip (slow, unthemed, and drawn outside the webview).
+   Positioned in viewport coordinates by the component; it starts hidden so
+   the first paint cannot flash at the unclamped position.
+   ────────────────────────────────────────────────────────────────────────── */
+.tooltip {
+  position: fixed;
+  z-index: 60;
+  visibility: hidden;
+  /* Wide enough for a branch name or a path, narrow enough to stay inside a
+     ~300px sidebar. Long unbroken values (paths, URLs) wrap rather than force
+     the box past the panel edge. */
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 5px var(--space-lg);
+  border-radius: var(--radius);
+  background: var(--vscode-editorHoverWidget-background, var(--bg-hover));
+  color: var(--vscode-editorHoverWidget-foreground, var(--fg));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
+  /* Two layers: a tight contact shadow so the box sits ON the panel, and a
+     soft ambient one so it reads as floating above it. */
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 4px 14px rgba(0, 0, 0, 0.34);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  text-align: left;
+  pointer-events: none;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  /* Fades in where it lands rather than appearing hard, which at a 500ms
+     dwell otherwise reads as a flicker. */
+  animation: tooltip-in 90ms ease-out;
+}
+/* A title may carry several lines (the worktree chip, the health dot); the
+   first line is the label and the rest is detail, so it is set apart. */
+.tooltip {
+  --tooltip-detail: var(--fg-dim);
+}
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tooltip { animation: none; }
+}

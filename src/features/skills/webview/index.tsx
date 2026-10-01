@@ -1,0 +1,124 @@
+/**
+ * Skills feature entry. Mounts the list/detail views, wires the host→webview
+ * message bus, and requests the initial skills list. The TabPanel imports the
+ * default export the first time the Skills tab is activated.
+ */
+import { useEffect } from "preact/hooks";
+import { useApi } from "../../../webview/shared/hooks";
+import {
+  activeTab,
+  registerFeatureHandler,
+  registerPaletteSource,
+} from "../../../webview/shared/model";
+import { EmptyState, ListSkeleton } from "../../../webview/shared/ui";
+import type { Skill } from "../types";
+import { getSkills } from "./api";
+import {
+  claudeCodeInstalled,
+  errorMessage,
+  loaded,
+  marketplaceSkillsUrl,
+  selectedSkill,
+  skills,
+} from "./model";
+import { DetailView, ListView } from "./ui";
+
+/**
+ * Register message-bus handlers. Returns a disposer that removes them.
+ * Exported for direct testing without mounting the component.
+ *
+ * The bus delivers messages already validated by the shared valibot
+ * `parseMessage` (see messageBus.ts), so handlers can trust the variant
+ * tag; we only narrow the `unknown` data payloads here.
+ */
+export function registerSkillsHandlers(): () => void {
+  const offSkills = registerFeatureHandler("skill", (msg) => {
+    if (msg.type === "skills") {
+      skills.value = (msg.data as Skill[]) ?? [];
+      // First list (even empty) ends the cold-start loading gate so the list /
+      // empty-state can render; an empty array only reads as "no skills" once
+      // the host has actually answered.
+      loaded.value = true;
+      errorMessage.value = null;
+      // Re-resolve the selection against the fresh list so a delete or
+      // rename on the host doesn't leave a stale detail panel open.
+      const sel = selectedSkill.value;
+      if (sel) selectedSkill.value = skills.value.find((s) => s.id === sel.id) ?? null;
+    } else if (msg.type === "skillDetail") {
+      selectedSkill.value = msg.data as Skill;
+    }
+  });
+
+  // A host parse/read failure also ends loading — otherwise the panel would sit
+  // on the <Loading /> placeholder forever. Surface it distinctly from "no
+  // skills" (see errorMessage) so a real failure doesn't read as an empty list.
+  const offError = registerFeatureHandler("error", (msg) => {
+    if (msg.type === "error") {
+      loaded.value = true;
+      errorMessage.value = msg.message;
+    }
+  });
+
+  // Marketplace URL + Claude Code install flag ride in on the host's
+  // `settings` message. Kept feature-local so the webview is self-contained.
+  const offSettings = registerFeatureHandler("settings", (msg) => {
+    if (msg.type !== "settings") return;
+    const s = msg as { marketplaceSkillsUrl?: unknown; claudeCodeExtensionInstalled?: unknown };
+    if (typeof s.marketplaceSkillsUrl === "string" && s.marketplaceSkillsUrl.length > 0) {
+      marketplaceSkillsUrl.value = s.marketplaceSkillsUrl;
+    }
+    if (typeof s.claudeCodeExtensionInstalled === "boolean") {
+      claudeCodeInstalled.value = s.claudeCodeExtensionInstalled;
+    }
+  });
+
+  // Skills in the command palette. The source is called per query, so
+  // it always reads the live signal without this module subscribing to it.
+  const offPalette = registerPaletteSource("skills", () =>
+    skills.value.map((s) => ({
+      id: `skills:${s.name}`,
+      title: s.name,
+      subtitle: s.description,
+      group: "Skills",
+      icon: "sparkles",
+      hint: s.scope,
+      run: () => {
+        activeTab.value = "skills";
+        selectedSkill.value = s;
+      },
+    })),
+  );
+  return () => {
+    offSkills();
+    offSettings();
+    offError();
+    offPalette();
+  };
+}
+
+export default function SkillsTab() {
+  const { post } = useApi();
+
+  useEffect(() => {
+    const dispose = registerSkillsHandlers();
+    getSkills(post);
+    return dispose;
+  }, [post]);
+
+  // Before the host's first `skills` message, show the content-shaped
+  // <ListSkeleton /> (search row + scope filter + list rows) rather than the
+  // list's "No skills found" empty-state. The detail view renders synchronously
+  // from the already-loaded list skill, so it needs no gate of its own.
+  const selected = selectedSkill.value;
+  if (selected) return <DetailView skill={selected} />;
+  if (!loaded.value) return <ListSkeleton />;
+  if (errorMessage.value)
+    return (
+      <EmptyState
+        icon="circle-alert"
+        title="Couldn't load skills"
+        description={errorMessage.value}
+      />
+    );
+  return <ListView />;
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f6f3ed">
+  <meta name="description" content="Download Claude Code Manager Personal, an unofficial VS Code extension fork for saved accounts, conversation history, and task continuation.">
+  <title>Claude Code Manager Personal · Download</title>
+  <link rel="canonical" href="https://buicongnguyen.github.io/claude_extension/">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header page-width">
+    <a class="brand" href="#main" aria-label="Claude Code Manager Personal home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span>Claude Code Manager <strong>Personal</strong></span>
+    </a>
+    <a class="header-link" href="#install">Installation <span aria-hidden="true">↘</span></a>
+  </header>
+
+  <main id="main" class="page-width">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="small-dot" aria-hidden="true"></span> An unofficial VS Code extension</p>
+        <h1 id="hero-title">Claude Code Manager <em>Personal.</em></h1>
+        <p class="hero-description">Keep saved accounts and conversation history close at hand. Continue unfinished work when your Claude usage allowance resets.</p>
+        <div class="hero-tags" aria-label="Package details">
+          <span>Local VSIX</span><span>Version 2.15.5</span><span>Apache-2.0</span>
+        </div>
+      </div>
+
+      <aside class="download-card" aria-labelledby="download-title">
+        <div class="card-heading">
+          <span class="eyebrow">Ready to install</span>
+          <span class="version">v2.15.5</span>
+        </div>
+        <div class="package-icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none"><path d="M24 5 41 15v18L24 43 7 33V15L24 5Z" stroke="currentColor" stroke-width="1.7"/><path d="m7 15 17 10 17-10M24 25v18M15.5 10l17 10v7" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        </div>
+        <h2 id="download-title">Your extension,<br>on your computer.</h2>
+        <p>Download the package and install it in VS Code. You can use the same file on another machine.</p>
+        <a class="button button-primary" href="downloads/claude-manager-personal-2.15.5.vsix" download>
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2v10m0 0 4-4m-4 4L6 8M3 13v4h14v-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download VSIX
+        </a>
+        <a class="button button-secondary" href="https://github.com/buicongnguyen/claude_extension">View source <span aria-hidden="true">↗</span></a>
+        <p class="package-name">claude-manager-personal-2.15.5.vsix</p>
+      </aside>
+    </section>
+
+    <section id="install" class="section-block" aria-labelledby="install-title">
+      <div class="section-heading">
+        <p class="eyebrow">Getting started</p>
+        <h2 id="install-title">Install in VS Code.</h2>
+        <p>No build step required.</p>
+      </div>
+      <ol class="install-grid">
+        <li>
+          <span class="step-number" aria-hidden="true">01</span>
+          <h3>Prepare your extensions</h3>
+          <p>Disable the original <strong>Claude Code Manager</strong> extension. Keep Anthropic’s official <strong>Claude Code</strong> extension enabled.</p>
+          <p class="step-note">The original Manager and this fork share command IDs, so enable only one Manager.</p>
+        </li>
+        <li>
+          <span class="step-number" aria-hidden="true">02</span>
+          <h3>Install the VSIX</h3>
+          <p>In VS Code’s Extensions view, open the <strong>⋯</strong> menu and choose <strong>Install from VSIX…</strong>. Select the file you downloaded.</p>
+        </li>
+        <li>
+          <span class="step-number" aria-hidden="true">03</span>
+          <h3>Reload the window</h3>
+          <p>Reload VS Code when prompted, then open <strong>Claude Code Manager Personal</strong> to browse your conversations and manage saved accounts.</p>
+        </li>
+        <li>
+          <span class="step-number" aria-hidden="true">04</span>
+          <h3>Set up this machine</h3>
+          <p>Sign in to your own Claude accounts and save their profiles here. On another computer, repeat this setup.</p>
+          <p class="step-note">Saved profiles are neither bundled with the download nor synced between machines.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-block behavior-section" aria-labelledby="behavior-title">
+      <div class="section-heading">
+        <p class="eyebrow">Two different actions</p>
+        <h2 id="behavior-title">Open the history.<br>Or continue the task.</h2>
+      </div>
+      <div class="behavior-grid">
+        <article class="behavior-card">
+          <span class="action-symbol" aria-hidden="true">▷</span>
+          <h3>Continue task</h3>
+          <p>After your usage allowance resets, this opens the same conversation in a terminal and submits a request to continue the unfinished task.</p>
+          <p class="requirement">Install the <a href="https://code.claude.com/docs/en/setup">standalone Claude Code CLI</a> first. Close the previous Claude client before continuing; the extension asks you to confirm.</p>
+        </article>
+        <article class="behavior-card">
+          <span class="action-symbol" aria-hidden="true">↗</span>
+          <h3>Open conversation</h3>
+          <p>This opens your conversation history. It does not submit a new request or restart an unfinished task.</p>
+          <p class="requirement">For a conversation that is already running, <strong>View</strong> reveals its existing chat or terminal.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="verification" aria-labelledby="verification-title">
+      <div>
+        <p class="eyebrow">Package verification</p>
+        <h2 id="verification-title">The file’s fingerprint.</h2>
+        <p>SHA-256 · Version 2.15.5</p>
+      </div>
+      <code class="checksum">9a9b68f7343c3cd131f31603a1259ea165a074f2b0d5c9d3f118bf52800fc883</code>
+    </section>
+
+    <aside class="testing-note" aria-label="Testing status">
+      <span class="note-mark" aria-hidden="true">i</span>
+      <p>Automated checks cover synthetic accounts and recovery paths. Live quota resets and real account transitions have not yet been verified.</p>
+    </aside>
+  </main>
+
+  <footer class="site-footer page-width">
+    <div>
+      <p><strong>A personal fork, shared openly.</strong></p>
+      <p>This is an unofficial fork of <a href="https://github.com/vishalguptax/claude-code-manager">Claude Code Manager by Vishal Gupta</a>. It is not an Anthropic product.</p>
+    </div>
+    <a href="https://github.com/buicongnguyen/claude_extension/blob/main/LICENSE">Apache-2.0 license <span aria-hidden="true">↗</span></a>
+  </footer>
+</body>
+</html>

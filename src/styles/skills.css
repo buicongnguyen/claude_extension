@@ -1,0 +1,35 @@
+/* ============================================================================
+   Claude Session Manager — Skills Styles
+   Skills list items, detail view, scope badges, content display
+   ============================================================================ */
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Scope Badge — shape and colour both come from the shared <Badge scope="…">.
+   The only thing skills adds is a shrink guard, so a long skill name cannot
+   squeeze the chip out of the row.
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.skill-scope-badge {
+  flex-shrink: 0;
+}
+
+
+.skill-item { transition: background var(--transition-control); }
+.skill-item:hover { background: var(--bg-hover); }
+.skill-item:focus-visible { outline: 1px solid var(--list-focus); outline-offset: -1px; }
+
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Skill Content (SKILL.md body)
+   ────────────────────────────────────────────────────────────────────────────── */
+
+.skill-content {
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  padding: var(--space-md) 0;
+}

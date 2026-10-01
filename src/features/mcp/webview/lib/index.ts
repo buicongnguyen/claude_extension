@@ -1,0 +1,19 @@
+/**
+ * Barrel for the MCP slice's pure helpers (lib segment). No JSX, no state.
+ */
+export {
+  MCP_BROWSE_URL,
+  buildRows,
+  connectionPreview,
+  groupLabel,
+  isUrlTransport,
+  maskSensitiveValue,
+  type Row,
+} from "./helpers";
+export {
+  buildMcpMenu,
+  canAuthMcp,
+  canEditMcp,
+  canToggleMcp,
+  type McpMenuHandlers,
+} from "./mcpMenu";

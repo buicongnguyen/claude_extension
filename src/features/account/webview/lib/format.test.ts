@@ -1,0 +1,443 @@
+import { describe, expect, it } from "vitest";
+import type { AccountData, UsageStats } from "../../types";
+import {
+  accountKey,
+  cacheHitTooltip,
+  computeUsageTotals,
+  currencyFractionDigits,
+  displayToolName,
+  formatDuration,
+  formatFetchedRelative,
+  formatModelName,
+  formatMoney,
+  formatNumber,
+  tokenTotalTooltip,
+  formatPct,
+  formatPlan,
+  formatResetsIn,
+  quotaFreshness,
+  quotaTone,
+  shortenProjectPath,
+} from "./format";
+
+describe("formatNumber", () => {
+  it("formats millions and thousands", () => {
+    expect(formatNumber(2_500_000)).toBe("2.5M");
+    expect(formatNumber(12_300)).toBe("12.3K");
+  });
+  it("scales to billions — lifetime cache-read totals cross 1e9", () => {
+    expect(formatNumber(1_240_000_000)).toBe("1.2B");
+    expect(formatNumber(3_000_000_000)).toBe("3B");
+  });
+  it("drops a redundant .0", () => {
+    expect(formatNumber(2_000_000)).toBe("2M");
+    expect(formatNumber(5_000)).toBe("5K");
+  });
+  it("uses locale string under 1000", () => {
+    expect(formatNumber(999)).toBe("999");
+  });
+  it("keeps the sign and never renders NaN", () => {
+    expect(formatNumber(-1_500_000)).toBe("-1.5M");
+    expect(formatNumber(Number.NaN)).toBe("0");
+  });
+});
+
+describe("formatPct", () => {
+  it("rounds a ratio to percent", () => {
+    expect(formatPct(0.834)).toBe("83%");
+  });
+  it("falls back to em-dash for zero / non-finite", () => {
+    expect(formatPct(0)).toBe("—");
+    expect(formatPct(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatDuration", () => {
+  it("includes days when present", () => {
+    expect(formatDuration(90_061_000)).toBe("1d 1h 1m");
+  });
+  it("drops days when under 24h", () => {
+    expect(formatDuration(3_660_000)).toBe("1h 1m");
+  });
+  it("shows minutes only when under an hour", () => {
+    expect(formatDuration(120_000)).toBe("2m");
+  });
+});
+
+describe("formatModelName", () => {
+  it("shortens a versioned claude id", () => {
+    expect(formatModelName("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5");
+  });
+  it("handles single-segment versions", () => {
+    expect(formatModelName("claude-opus-4")).toBe("Opus 4");
+  });
+  it("returns the input verbatim when it doesn't match", () => {
+    expect(formatModelName("gpt-4o")).toBe("gpt-4o");
+  });
+  it("names families beyond the original three", () => {
+    expect(formatModelName("claude-fable-5-1")).toBe("Fable 5.1");
+    expect(formatModelName("claude-opus-5")).toBe("Opus 5");
+  });
+  it("surfaces the 1M-context suffix instead of collapsing two rows", () => {
+    expect(formatModelName("claude-opus-5[1m]")).toBe("Opus 5 (1M)");
+    expect(formatModelName("claude-opus-5")).not.toBe(
+      formatModelName("claude-opus-5[1m]"),
+    );
+  });
+});
+
+describe("currencyFractionDigits", () => {
+  it("returns 0 for zero-decimal currencies", () => {
+    expect(currencyFractionDigits("JPY")).toBe(0);
+  });
+  it("returns 3 for three-decimal currencies", () => {
+    expect(currencyFractionDigits("BHD")).toBe(3);
+  });
+  it("defaults to 2", () => {
+    expect(currencyFractionDigits("USD")).toBe(2);
+  });
+});
+
+describe("formatMoney", () => {
+  it("converts AUD minor units to major before formatting", () => {
+    // 23346 cents → 233.46 AUD (not 23346.00).
+    const out = formatMoney(23346, "AUD");
+    expect(out).toContain("233.46");
+  });
+  it("respects zero-decimal currencies", () => {
+    const out = formatMoney(1500, "JPY");
+    expect(out).not.toContain(".");
+  });
+  it("still renders the major amount for an unusual code", () => {
+    // Intl accepts well-formed 3-letter codes and renders the code as
+    // the symbol (e.g. "ZZZ 10.00"); either way the major amount shows.
+    expect(formatMoney(1000, "ZZZ")).toContain("10.00");
+  });
+});
+
+describe("formatResetsIn", () => {
+  it("returns empty for blank / invalid input", () => {
+    expect(formatResetsIn("")).toBe("");
+    expect(formatResetsIn("not-a-date")).toBe("");
+  });
+  it("formats days, hours, minutes", () => {
+    // `now` is injected rather than left to default to Date.now(). With
+    // the default, the clock advances between building the ISO string
+    // and reading it, so a 10-minute offset floors to 9 under load —
+    // this test failed intermittently in CI for exactly that reason.
+    const now = Date.parse("2026-06-10T12:00:00Z");
+    const at = (ms: number): string => new Date(now + ms).toISOString();
+    expect(formatResetsIn(at(2 * 86400000 + 3 * 3600000), now)).toBe("resets in 2d 3h");
+    expect(formatResetsIn(at(3 * 3600000 + 5 * 60000), now)).toBe("resets in 3h 5m");
+    expect(formatResetsIn(at(10 * 60000), now)).toBe("resets in 10m");
+  });
+  it("flags a past reset as outdated (cached window already rolled over)", () => {
+    expect(formatResetsIn(new Date(Date.now() - 1000).toISOString())).toBe(
+      "outdated · open Claude to refresh",
+    );
+  });
+});
+
+describe("formatFetchedRelative", () => {
+  it("returns just now for very recent / invalid", () => {
+    expect(formatFetchedRelative("bad")).toBe("just now");
+    expect(formatFetchedRelative(new Date().toISOString())).toBe("just now");
+  });
+  it("formats minutes and hours ago", () => {
+    expect(formatFetchedRelative(new Date(Date.now() - 5 * 60000).toISOString())).toBe("5m ago");
+    expect(formatFetchedRelative(new Date(Date.now() - 2 * 3600000).toISOString())).toBe("2h ago");
+  });
+  it("honours an injected now and rolls into days", () => {
+    const now = Date.parse("2026-06-10T12:00:00Z");
+    const threeDaysAgo = "2026-06-07T12:00:00Z";
+    expect(formatFetchedRelative(threeDaysAgo, now)).toBe("3d ago");
+  });
+});
+
+describe("quotaFreshness", () => {
+  const now = Date.parse("2026-06-10T12:00:00Z");
+  it("is fresh for a recent capture", () => {
+    const f = quotaFreshness("2026-06-10T11:58:00Z", now); // 2m ago
+    expect(f).toEqual({ text: "2m ago", stale: false });
+  });
+  it("is stale once the capture passes the idle threshold", () => {
+    const f = quotaFreshness("2026-06-10T11:40:00Z", now); // 20m ago
+    expect(f.stale).toBe(true);
+    expect(f.text).toBe("20m ago");
+  });
+  it("never marks an unparseable timestamp stale", () => {
+    expect(quotaFreshness("nope", now)).toEqual({ text: "just now", stale: false });
+  });
+});
+
+describe("formatPlan", () => {
+  it("returns the bare family for Pro / Team / Free", () => {
+    expect(formatPlan("pro", "")).toBe("Pro");
+    expect(formatPlan("team", "default_raven")).toBe("Team");
+    expect(formatPlan("free", "")).toBe("Free");
+  });
+  it("reads the Pro/Max multiplier from the slug (lowercase x, Anthropic style)", () => {
+    expect(formatPlan("max", "default_claude_max_20x")).toBe("Max 20x");
+    expect(formatPlan("max", "default_claude_max_5x")).toBe("Max 5x");
+  });
+  it("shows bare Team — the seat tier is not in any decodable field", () => {
+    expect(formatPlan("team", "default_raven")).toBe("Team");
+  });
+  it("falls back to the bare family for Pro/Max with an opaque codename", () => {
+    expect(formatPlan("max", "default_raven")).toBe("Max");
+  });
+  it("returns empty for an absent subscription type", () => {
+    expect(formatPlan("", "default_max_20x")).toBe("");
+  });
+});
+
+describe("quotaTone", () => {
+  it("maps utilization to tiers", () => {
+    expect(quotaTone(90)).toBe("high");
+    expect(quotaTone(60)).toBe("mid");
+    expect(quotaTone(10)).toBe("low");
+  });
+});
+
+describe("shortenProjectPath", () => {
+  it("keeps the last two segments of a real path", () => {
+    expect(shortenProjectPath("/home/me/projects/claude-manager")).toBe("projects/claude-manager");
+    expect(shortenProjectPath("C:\\Users\\me\\app")).toBe("me/app");
+  });
+  it("falls back to slug tail", () => {
+    expect(shortenProjectPath("C--Users-me-claude-manager")).toBe("me-claude-manager");
+  });
+  it("returns (unknown) for empty", () => {
+    expect(shortenProjectPath("")).toBe("(unknown)");
+  });
+});
+
+describe("displayToolName", () => {
+  it("collapses MCP tool names to server: tool", () => {
+    expect(displayToolName("mcp__github__create_issue")).toBe("github: create_issue");
+  });
+  it("returns built-in tool names verbatim", () => {
+    expect(displayToolName("Read")).toBe("Read");
+  });
+});
+
+function makeUsage(overrides: Partial<UsageStats> = {}): UsageStats {
+  return {
+    daily: [],
+    dailyTokens: [],
+    dailyOwnTokens: [],
+    activeDays: 0,
+    totalDays: 0,
+    mostActiveDay: "",
+    longestStreak: 0,
+    currentStreak: 0,
+    byModel: [],
+    favoriteModel: "",
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalTokens: 0,
+    totalSessions: 0,
+    totalMessages: 0,
+    longestSessionMs: 0,
+    firstSessionDate: "",
+    lastComputedDate: "",
+    totalCostUsd: 0,
+    pricesEffectiveDate: "",
+    totalCacheReadTokens: 0,
+    totalCacheCreationTokens: 0,
+    cacheHitRatio: 0,
+    byProject: [],
+    byTool: [],
+    byMcpServer: [],
+    ...overrides,
+  };
+}
+
+describe("cacheHitTooltip", () => {
+  it("explains no activity when nothing recorded", () => {
+    expect(cacheHitTooltip(makeUsage())).toBe("No cache activity recorded yet.");
+  });
+  it("describes the cache math when present", () => {
+    const u = makeUsage({
+      totalCacheReadTokens: 1000,
+      totalInputTokens: 3000,
+      totalCacheCreationTokens: 200,
+    });
+    const out = cacheHitTooltip(u);
+    expect(out).toContain("served from prompt cache");
+    // Denominator must be the one cacheHitRatioOf uses — reads + writes
+    // + never-cached input (1000 + 200 + 3000), not reads + input.
+    expect(out).toContain("4.2K prompt-input tokens");
+    expect(out).toContain("200 written to cache");
+    expect(out).toContain("3K never cached");
+  });
+});
+
+describe("tokenTotalTooltip", () => {
+  const u = makeUsage({
+    totalInputTokens: 3_000,
+    totalOutputTokens: 2_000,
+    totalCacheReadTokens: 1_000_000,
+    totalCacheCreationTokens: 50_000,
+  });
+
+  it("says the figure excludes cache traffic, and how much that was", () => {
+    const out = tokenTotalTooltip(u, {
+      tokenTotal: 5_000,
+      tokenDayCoverage: { withBreakdown: 4, active: 4 },
+      sessions: 1,
+      messages: 1,
+      activeInPeriod: 4,
+      totalInPeriod: 7,
+    });
+    expect(out).toContain("Input + output only");
+    expect(out).toContain("1M read");
+    expect(out).toContain("50K written");
+    expect(out).not.toContain("of 4 active days");
+  });
+
+  it("discloses partial coverage when older days have no breakdown", () => {
+    const out = tokenTotalTooltip(u, {
+      tokenTotal: 5_000,
+      tokenDayCoverage: { withBreakdown: 4, active: 12 },
+      sessions: 1,
+      messages: 1,
+      activeInPeriod: 12,
+      totalInPeriod: 30,
+    });
+    expect(out).toContain("4 of 12 active days counted");
+  });
+});
+
+describe("computeUsageTotals", () => {
+  const u = makeUsage({
+    daily: [
+      { date: "2026-05-01", messageCount: 5, sessionCount: 2, toolCallCount: 9 },
+      { date: "2026-05-20", messageCount: 3, sessionCount: 1, toolCallCount: 4 },
+    ],
+    // dailyTokens is the combined series (heatmap shading); the period
+    // token figure reads dailyOwnTokens, which excludes cache traffic.
+    dailyTokens: [
+      { date: "2026-05-01", total: 1000 },
+      { date: "2026-05-20", total: 2000 },
+    ],
+    dailyOwnTokens: [
+      { date: "2026-05-01", total: 400 },
+      { date: "2026-05-20", total: 600 },
+    ],
+    totalDays: 30,
+    totalSessions: 99,
+    totalMessages: 88,
+    totalInputTokens: 20_000,
+    totalOutputTokens: 57_000,
+    totalTokens: 77_000 + 5_000_000,
+  });
+
+  it("uses lifetime input + output for the all-time period", () => {
+    const t = computeUsageTotals(u, "all");
+    expect(t.sessions).toBe(99);
+    expect(t.messages).toBe(88);
+    // Not totalTokens — that one carries cache traffic, which is what
+    // made the headline read in the billions.
+    expect(t.tokenTotal).toBe(77_000);
+    expect(t.totalInPeriod).toBe(30);
+  });
+
+  it("reports all-time as fully covered — lifetime counters are exact", () => {
+    // The per-day series is sparse (older transcripts get cleaned up),
+    // but all-time does not read it, so it must not claim a shortfall.
+    const sparse = { ...u, dailyOwnTokens: [] };
+    const t = computeUsageTotals(sparse, "all");
+    expect(t.tokenTotal).toBe(77_000);
+    expect(t.tokenDayCoverage.withBreakdown).toBe(t.tokenDayCoverage.active);
+  });
+
+  it("reports partial coverage when a period's older days lack a breakdown", () => {
+    const sparse = {
+      ...u,
+      dailyOwnTokens: [{ date: "2026-05-20", total: 600 }],
+    };
+    const t = computeUsageTotals(sparse, "month");
+    expect(t.tokenDayCoverage).toEqual({ withBreakdown: 1, active: 2 });
+  });
+
+  it("filters to the recent window for week", () => {
+    // Anchored to 2026-05-20; only that day is within 7 days.
+    const t = computeUsageTotals(u, "week");
+    expect(t.sessions).toBe(1);
+    expect(t.messages).toBe(3);
+    expect(t.tokenTotal).toBe(600);
+    expect(t.totalInPeriod).toBe(7);
+    expect(t.activeInPeriod).toBe(1);
+  });
+});
+
+describe("accountKey", () => {
+  it("combines slug and email", () => {
+    const data = {
+      profile: { email: "a@b.com" },
+      activeProfileSlug: "work",
+    } as unknown as AccountData;
+    expect(accountKey(data)).toBe("work|a@b.com");
+  });
+  it("handles a null slug", () => {
+    const data = {
+      profile: { email: "x@y.com" },
+      activeProfileSlug: null,
+    } as unknown as AccountData;
+    expect(accountKey(data)).toBe("|x@y.com");
+  });
+});
+
+import { formatPrRef, formatRepo, formatReviewState } from "./format";
+
+describe("formatRepo", () => {
+  it("renders owner/name for a github.com remote", () => {
+    expect(formatRepo({ host: "github.com", owner: "acme", name: "widgets" })).toBe(
+      "acme/widgets",
+    );
+  });
+
+  it("names the host when the remote is anywhere else", () => {
+    // A self-hosted GitLab and github.com/acme/widgets are different
+    // repositories that would otherwise render identically.
+    expect(formatRepo({ host: "gitlab.acme.dev", owner: "acme", name: "widgets" })).toBe(
+      "gitlab.acme.dev/acme/widgets",
+    );
+  });
+
+  it("falls back to owner/name when the host is unreported", () => {
+    expect(formatRepo({ host: "", owner: "acme", name: "widgets" })).toBe("acme/widgets");
+  });
+
+  it("is empty when there is no repo", () => {
+    expect(formatRepo(null)).toBe("");
+  });
+});
+
+describe("formatPrRef", () => {
+  it("writes a GitHub pull request as #N", () => {
+    expect(formatPrRef({ number: 412, url: "", reviewState: "", kind: "" })).toBe("#412");
+  });
+
+  it("writes a GitLab merge request as !N", () => {
+    // GitLab's own convention, and the reason Claude Code sends `kind`.
+    expect(formatPrRef({ number: 88, url: "", reviewState: "", kind: "mr" })).toBe("!88");
+  });
+
+  it("is empty when there is no PR", () => {
+    expect(formatPrRef(null)).toBe("");
+  });
+});
+
+describe("formatReviewState", () => {
+  it("de-underscores the states the CLI ships today", () => {
+    expect(formatReviewState("changes_requested")).toBe("changes requested");
+    expect(formatReviewState("approved")).toBe("approved");
+    expect(formatReviewState("draft")).toBe("draft");
+  });
+
+  it("renders a state added after we shipped rather than dropping it", () => {
+    expect(formatReviewState("merge_conflict_detected")).toBe("merge conflict detected");
+  });
+});

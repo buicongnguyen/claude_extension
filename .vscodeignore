@@ -1,0 +1,51 @@
+.vscode/**
+.claude/**
+.dev/**
+.github/**
+src/**
+node_modules/**
+docs/**
+!docs/PERSONAL-VERIFICATION.md
+!docs/REVIEW-FIXES.md
+!docs/RESUME-REVIEW.md
+!docs/POST-RESET-REVIEW.md
+!docs/UPSTREAM-README.md
+.gitignore
+tsconfig.json
+tsconfig.integration.json
+vitest.config.ts
+biome.json
+scripts/**
+# F3 test + coverage artifacts — dev only, never shipped.
+coverage/**
+out/**
+test/**
+.vscode-test/**
+VERIFY.md
+.nvmrc
+*.map
+dist/**/*.map
+*.vsix
+dist/package-inspection.json
+
+# Hero GIF + screenshots are referenced by README via absolute
+# https://raw.githubusercontent.com/... URLs so the marketplace
+# listing renders them without bundling. Keep in repo for GitHub
+# to serve; exclude from .vsix — demo.gif alone is 3.7MB.
+media/demo.gif
+media/screenshots/**
+media/marketplace-icon.svg
+.local-plans/**
+.binaryos/**
+
+# Agent / skill tooling and repo-only docs that crept into the package.
+# `.agents/` alone is 160+ files (the impeccable skill toolkit) and has
+# nothing to do with the shipped extension — none of this is referenced by
+# dist/. Excluding it is the bulk of the package-size fix.
+.agents/**
+.impeccable/**
+.impeccable
+skills-lock.json
+CLAUDE.md
+marketing/**
+site/**
