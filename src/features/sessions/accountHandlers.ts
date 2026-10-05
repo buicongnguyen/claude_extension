@@ -106,89 +106,9 @@ export async function handleAccountMessage(
       break;
     }
 
-    case "promptSaveProfile": {
-      // Native VS Code input box replaces the old inline save form.
-      // Default label sourced from the live account so most users
-      // can just press Enter. We pre-parse account data once to seed
-      // the default; re-parse after save so the reply reflects the
-      // new profile list.
-      const workspace = getWorkspace();
-      const current = parseAccountData(workspace || undefined);
-      const p = current.profile;
-
-      // One-time security disclaimer: saving copies the OAuth
-      // token into this personal fork's encrypted account vault. We surface that
-      // exactly once via globalState so users give informed
-      // consent on first save, then never see it again. Refusing
-      // the prompt aborts the save entirely.
-      const DISCLAIMER_KEY = "claudeManager.accounts.disclaimerAck";
-      const seen = ctx.globalState?.get<boolean>(DISCLAIMER_KEY) ?? false;
-      if (!seen) {
-        const choice = await vscode.window.showWarningMessage(
-          "Save Claude account as a profile?",
-          {
-            modal: true,
-            detail:
-              "Claude Code Manager Personal saves encrypted account snapshots in its VS Code storage folder. The encryption key is protected by VS Code SecretStorage. Switching restores the selected login to Claude's own credential store; that live store follows Claude's normal security model. Stop running Claude sessions before switching. This notice is shown once.",
-          },
-          "Understood, save",
-        );
-        if (choice !== "Understood, save") break;
-        await ctx.globalState?.update(DISCLAIMER_KEY, true);
-      }
-
-      const defaultLabel =
-        p.organizationName ||
-        p.displayName ||
-        (p.email ? p.email.split("@")[0] : "Profile");
-      const label = await vscode.window.showInputBox({
-        title: "Save account as profile",
-        prompt: "Label for this Claude account snapshot",
-        value: defaultLabel,
-        validateInput: (v: string) =>
-          v.trim().length > 0 ? null : "Label cannot be empty",
-      });
-      if (label === undefined) break;
-      const result = saveProfileSnapshot(label);
-      if (!result.ok) {
-        if (result.error === "already-saved" && result.detail) {
-          // A slot already exists for this identity — happens when Claude
-          // CLI's token rotation desynced the active-profile hash match and
-          // the UI re-surfaced "Save profile". Offer to Update the existing
-          // slot so tokens get re-captured, which is almost always intended.
-          const existingSlug = result.detail;
-          const existing = listProfilesSnapshot().find((pp) => pp.slug === existingSlug);
-          const existingLabel = existing?.label ?? existingSlug;
-          const choice = await vscode.window.showInformationMessage(
-            `A profile already exists for this account (${existingLabel}).`,
-            {
-              modal: true,
-              detail:
-                "Refresh its saved tokens with the current login so it picks up Claude CLI's latest rotated token.",
-            },
-            "Update existing",
-          );
-          if (choice === "Update existing") {
-            const upd = await updateProfileSnapshot(existingSlug);
-            if (!upd.ok) {
-              vscode.window.showErrorMessage(
-                `Couldn't update profile: ${upd.detail ?? upd.error}.`,
-              );
-            } else {
-              vscode.window.showInformationMessage(
-                `Profile "${upd.data.label}" refreshed.`,
-              );
-            }
-          }
-        } else {
-          vscode.window.showErrorMessage(
-            `Couldn't save profile: ${result.detail ?? result.error}.`,
-          );
-        }
-      }
-      postAccountData(wv, parseAccountData(workspace || undefined));
+    case "promptSaveProfile":
+      await promptToSaveProfile(ctx);
       break;
-    }
 
     case "openAccountSwitcher":
       await ctx.openAccountSwitcher();
@@ -262,4 +182,95 @@ export async function handleAccountMessage(
       return false;
   }
   return true;
+}
+
+/** Native save flow also works before the Manager panel has been opened. */
+export async function promptToSaveProfile(ctx: Pick<HostContext, "getWebview" | "globalState">): Promise<boolean> {
+  // Native VS Code input box replaces the old inline save form.
+  // Default label sourced from the live account so most users
+  // can just press Enter. We pre-parse account data once to seed
+  // the default; re-parse after save so the reply reflects the
+  // new profile list.
+  const workspace = getWorkspace();
+  const current = parseAccountData(workspace || undefined);
+  const p = current.profile;
+
+  // One-time security disclaimer: saving copies the OAuth
+  // token into this personal fork's encrypted account vault. We surface that
+  // exactly once via globalState so users give informed
+  // consent on first save, then never see it again. Refusing
+  // the prompt aborts the save entirely.
+  const DISCLAIMER_KEY = "claudeManager.accounts.disclaimerAck";
+  const seen = ctx.globalState?.get<boolean>(DISCLAIMER_KEY) ?? false;
+  if (!seen) {
+    const choice = await vscode.window.showWarningMessage(
+      "Save Claude account as a profile?",
+      {
+        modal: true,
+        detail:
+          "Claude Code Manager Personal saves encrypted account snapshots in its VS Code storage folder. The encryption key is protected by VS Code SecretStorage. Switching restores the selected login to Claude's own credential store; that live store follows Claude's normal security model. Stop running Claude sessions before switching. This notice is shown once.",
+      },
+      "Understood, save",
+    );
+    if (choice !== "Understood, save") return false;
+    await ctx.globalState?.update(DISCLAIMER_KEY, true);
+  }
+
+  const defaultLabel =
+    p.organizationName ||
+    p.displayName ||
+    (p.email ? p.email.split("@")[0] : "Profile");
+  const label = await vscode.window.showInputBox({
+    title: "Save account as profile",
+    prompt: "Label for this Claude account snapshot",
+    value: defaultLabel,
+    validateInput: (v: string) =>
+      v.trim().length > 0 ? null : "Label cannot be empty",
+  });
+  if (label === undefined) return false;
+  const result = saveProfileSnapshot(label);
+  let saved = result.ok;
+  if (result.ok) {
+    void vscode.window.showInformationMessage(`Profile "${result.data.label}" saved. It is available in Switch account.`);
+  }
+  if (!result.ok) {
+    if (result.error === "already-saved" && result.detail) {
+      // A slot already exists for this identity — happens when Claude
+      // CLI's token rotation desynced the active-profile hash match and
+      // the UI re-surfaced "Save profile". Offer to Update the existing
+      // slot so tokens get re-captured, which is almost always intended.
+      const existingSlug = result.detail;
+      const existing = listProfilesSnapshot().find((pp) => pp.slug === existingSlug);
+      const existingLabel = existing?.label ?? existingSlug;
+      const choice = await vscode.window.showInformationMessage(
+        `A profile already exists for this account (${existingLabel}).`,
+        {
+          modal: true,
+          detail:
+            "Refresh its saved tokens with the current login so it picks up Claude CLI's latest rotated token.",
+        },
+        "Update existing",
+      );
+      if (choice === "Update existing") {
+        const upd = await updateProfileSnapshot(existingSlug);
+        saved = upd.ok;
+        if (!upd.ok) {
+          vscode.window.showErrorMessage(
+            `Couldn't update profile: ${upd.detail ?? upd.error}.`,
+          );
+        } else {
+          vscode.window.showInformationMessage(
+            `Profile "${upd.data.label}" refreshed.`,
+          );
+        }
+      }
+    } else {
+      vscode.window.showErrorMessage(
+        `Couldn't save profile: ${result.detail ?? result.error}.`,
+      );
+    }
+  }
+  const live = ctx.getWebview();
+  if (live) postAccountData(live, parseAccountData(workspace || undefined));
+  return saved;
 }

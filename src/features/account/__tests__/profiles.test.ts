@@ -219,6 +219,7 @@ describe("switchProfile", () => {
       { oauthAccount: { emailAddress: "other@x.com" } },
       { claudeAiOauth: { accessToken: "different-token", expiresAt: 0 } },
     );
+    expect(saveProfile("second").ok).toBe(true);
     const result = switchProfile("first");
     expect(result.ok).toBe(true);
     const live = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf-8")) as {

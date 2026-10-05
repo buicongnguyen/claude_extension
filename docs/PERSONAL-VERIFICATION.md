@@ -1,5 +1,15 @@
 # Personal fork verification
 
+## Version 2.15.7 — account preservation and terminal login
+
+Saved-account disappearance and native CLI launch paths received another code and logic review. See [ACCOUNT-PRESERVATION-2.15.7.md](ACCOUNT-PRESERVATION-2.15.7.md) and [the validation summary](https://github.com/buicongnguyen/claude_extension/blob/main/docs/VALIDATION-2.15.7.json).
+
+- Final full suite: **3,995 passed / 19 failed** (4,014 tests, 300 files), exactly the same 19 known upstream Windows failures as version 2.15.6. There are no new failures and no missing baseline failures.
+- Thirty-nine new regression cases cover outgoing-account preservation, identity conflicts, inaccessible config, encrypted listing diagnostics, native saving without a panel, picker freshness, and standalone CLI terminal environment handling.
+- TypeScript, configured Biome (131 files), extension/webview/CSS builds and VSIX packaging passed. Saved-account encryption and key format remain unchanged.
+- On the reported machine, the existing standalone CLI at ~/.local/bin/claude.exe reports version 2.1.288. Its missing user PATH entry was corrected without reinstalling Claude. Manager terminal environment handling is separately tested with synthetic filesystem and PATH inputs.
+- No real account switch, SecretStorage key read, browser login, Claude request or usage-reset transition was performed.
+
 ## Version 2.15.6 — code and logic review fixes
 
 The twelve confirmed review issues and related regression findings are repaired. See [REVIEW-FIXES-2.15.6.md](REVIEW-FIXES-2.15.6.md) for the changes and [the validation summary](https://github.com/buicongnguyen/claude_extension/blob/main/docs/VALIDATION-2.15.6.json) for the failing file/test identities.

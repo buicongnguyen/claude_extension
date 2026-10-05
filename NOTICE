@@ -17,4 +17,7 @@ branch checkout before resume, and explicit post-reset task continuation.
 Additional October 2026 hardening: uncached mutation reads, independent lock
 heartbeats and ownership checks, constrained Brain archives, locked MCP writes,
 exclusive atomic temporary files and process-ancestry terminal matching.
+Additional October 2026 fixes: unsaved-account preservation, visible unreadable
+profile diagnostics, native saving without a webview, identity conflict checks,
+and standalone CLI PATH support for Manager terminals.
 This is not an upstream release or an official Anthropic product.

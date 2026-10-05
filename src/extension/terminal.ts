@@ -4,6 +4,9 @@
  * Reads user settings for terminal location and position.
  */
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as os from "os";
+import { nativeClaudeTerminalEnvironment } from "../core/claudeCliEnvironment";
 
 /**
  * Validate a git ref name against git's own ref-format rules.
@@ -272,7 +275,14 @@ function getTerminalLocation(): vscode.TerminalEditorLocationOptions | undefined
  * user's own terminals too.
  */
 export function createTerminal(name: string, cwd?: string, sessionId?: string): vscode.Terminal {
-  const empty = vscode.window.terminals.find(
+  const cliEnvironment = nativeClaudeTerminalEnvironment({
+    platform: process.platform,
+    homeDirectory: os.homedir(),
+    environment: process.env,
+    isFile: filePath => fs.statSync(filePath).isFile(),
+  });
+  // An existing shell cannot inherit an environment correction after it started.
+  const empty = !cliEnvironment && vscode.window.terminals.find(
     (t) =>
       t.exitStatus === undefined &&
       !t.state.isInteractedWith &&
@@ -296,6 +306,7 @@ export function createTerminal(name: string, cwd?: string, sessionId?: string): 
   const term = vscode.window.createTerminal({
     name,
     cwd: cwd || undefined,
+    ...(cliEnvironment ? { env: cliEnvironment } : {}),
     ...(location ? { location } : {}),
   });
   sentTo.add(term);

@@ -20,7 +20,7 @@ import { discoverModelsFromCli } from "./models";
 import { isUsageAggregateWarming } from "./projectStats";
 import * as os from "os";
 import { CLAUDE_DIR, SETTINGS_FILE, claudeSettingsPath } from "../../core/config";
-import { listProfiles, getActiveProfileSlug } from "./profiles";
+import { readProfileListing, getActiveProfileSlug } from "./profiles";
 import { readQuotaHistory } from "./quotaHistory";
 import { readCredentials } from "./credentials";
 import { readClaudeJsonParsed } from "./claudeJsonCache";
@@ -369,7 +369,8 @@ export function parseAccountData(workspacePath?: string): AccountData {
   // payload stays a single parse pass. No network, no token exposure
   // — profiles.ts returns metadata with a credentials hash, not the
   // token itself.
-  const rawProfiles = listProfiles();
+  const listing = readProfileListing();
+  const rawProfiles = listing.profiles;
   const activeProfileSlug = getActiveProfileSlug(rawProfiles);
   // Attach each account's last-seen quota. Read once for the whole list
   // rather than per profile: it is a single small file, and the switcher
@@ -397,6 +398,7 @@ export function parseAccountData(workspacePath?: string): AccountData {
     // the dropdown says "Default (auto)" instead of a wrong claim.
     activeModel: resolveActiveModel(readStatuslineCache(), Date.now()) || undefined,
     savedProfiles,
+    profileStorageIssues: listing.issues,
     activeProfileSlug,
     settingsSnapshots: listAllSnapshots(workspacePath),
     usageWarming: isUsageAggregateWarming(),

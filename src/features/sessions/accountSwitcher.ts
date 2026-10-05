@@ -9,6 +9,7 @@
 import * as vscode from "vscode";
 import type { PanelSink } from "../../extension/panelSink";
 import { postAccountData } from "./accountPush";
+import { promptToSaveProfile } from "./accountHandlers";
 import { parseAccountData } from "../account/parser";
 import {
   removeProfile as removeProfileSnapshot,
@@ -61,6 +62,7 @@ export function profileRowText(
 /** Minimal context the switcher needs from the view provider. */
 export interface AccountSwitcherContext {
   getWebview(): PanelSink | undefined;
+  globalState?: vscode.Memento;
   /** Re-entrant dispatch for the save-profile flow. */
   dispatch(msg: WebviewMessage): Promise<void>;
 }
@@ -98,7 +100,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
   };
 
   type Item = vscode.QuickPickItem & {
-    action: "switch" | "save" | "login";
+    action: "switch" | "save" | "login" | "unreadable";
     slug?: string;
   };
 
@@ -158,7 +160,11 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     });
   }
 
-  if (sortedProfiles.length > 0) {
+  for (const issue of current.profileStorageIssues ?? []) {
+    items.push({ action: "unreadable", label: issue.slug || "Saved account storage", description: "Cannot read saved account", detail: issue.detail });
+  }
+
+  if (items.length > 0) {
     items.push({
       action: "save",
       label: "",
@@ -241,7 +247,6 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     picker.dispose();
     if (!pick) return;
     if (pick.action === "switch" && pick.slug) {
-      if (pick.slug === activeSlug) return;
       const targetProfile = savedProfiles.find((p) => p.slug === pick.slug);
       const confirm = await vscode.window.showWarningMessage(
         "Switch Claude account?",
@@ -249,7 +254,19 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
         "Switch",
       );
       if (confirm !== "Switch") return;
-      const result = await switchProfileSnapshot(pick.slug);
+      let result = await switchProfileSnapshot(pick.slug);
+      if (!result.ok && result.error === "unsaved-active-account") {
+        const choice = await vscode.window.showWarningMessage(
+          "Save the current account before switching?",
+          { modal: true, detail: "This login has no saved profile. Save it first so you can switch back later. Cancelling leaves your current login in place." },
+          "Save and switch",
+        );
+        if (choice !== "Save and switch") return;
+        if (!await promptToSaveProfile(ctx)) return;
+        // Retry through the backend guard: cancelling/failed save or a new login
+        // in another window must not replace an unsaved account.
+        result = await switchProfileSnapshot(pick.slug);
+      }
       if (!result.ok) {
         vscode.window.showErrorMessage(
           `Switch failed: ${result.detail ?? result.error}.`,
@@ -271,8 +288,10 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
         }
       }
       pushAccountUpdate();
+    } else if (pick.action === "unreadable") {
+      void vscode.window.showErrorMessage(pick.detail || "Saved account could not be read. Its stored files were left untouched.");
     } else if (pick.action === "save") {
-      void ctx.dispatch({ type: "promptSaveProfile" } as WebviewMessage);
+      await promptToSaveProfile(ctx);
     } else if (pick.action === "login") {
       // Re-read after the picker was open. Save any rotated outgoing tokens
       // before /login replaces them, using the same explicit lineage check.
@@ -305,9 +324,8 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
           // tab's save button. Wait for the snapshot to land before
           // firing /login so the overwrite happens against a safely-
           // backed-up state.
-          await ctx.dispatch({ type: "promptSaveProfile" } as WebviewMessage);
-          // If the user aborted the label input or the disclaimer,
-          // they're now looking at an unchanged home dir — still bail.
+          if (!await promptToSaveProfile(ctx)) return;
+          // Recheck account state after saving before opening a new login.
           const refreshed = parseAccountData(workspace || undefined);
           if (!refreshed.activeProfileSlug) return;
         }

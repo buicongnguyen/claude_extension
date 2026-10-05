@@ -30,6 +30,15 @@ export function ProfileView({ data, api }: ProfileViewProps) {
       <SectionHeader id="profile" title="Profile" collapsed={collapsed} onToggle={toggleSection} />
       {collapsed ? null : (
         <div class="section-body">
+          {data.profileStorageIssues?.length ? (
+            <div class="acct-banner" role="alert">
+              <Icon name="circle-alert" size={14} />
+              <div class="acct-banner-text">
+                <strong>A saved account could not be read.</strong>
+                <span>Its saved files are still stored. Open Switch account for details. You may need the matching VS Code secret storage or a fresh login.</span>
+              </div>
+            </div>
+          ) : null}
           {data.profile.signedIn ? (
             <SignedIn data={data} api={api} />
           ) : (
@@ -50,7 +59,7 @@ function SignedOut({ data, api }: ProfileViewProps) {
   return (
     <EmptyState compact title="Not signed in" description={hint}>
       <div class="actions-row">
-        {saved.length > 0 ? (
+        {saved.length > 0 || data.profileStorageIssues?.length ? (
           <Button
             variant="secondary"
             iconName="refresh-cw"

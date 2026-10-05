@@ -1,10 +1,12 @@
 # Claude Code Manager Personal
 
-A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.6**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
+A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.7**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
 
 It keeps the upstream session browser, account picker, usage display, MCP configuration and other tools. The changes focus on saving two accounts and switching manually between them.
 
 ## Changes
+
+- Version 2.15.7 protects unsaved accounts before switching, fixes native saving without an open Manager panel, and shows unreadable saved accounts instead of hiding them. See [the account preservation fixes](docs/ACCOUNT-PRESERVATION-2.15.7.md).
 
 - Version 2.15.6 adds fresh credential reads during account changes, a heartbeat that survives blocking operations, protected imports and MCP mutations, and fixes for restored terminals, sibling worktrees and multi-root branch selection. See [the review fixes](docs/REVIEW-FIXES-2.15.6.md).
 
@@ -25,11 +27,11 @@ Download the installer from the [download page](https://buicongnguyen.github.io/
 1. Disable or uninstall the original **Claude Code Manager** (`vishalguptax.claude-manager`). Both versions share command/view IDs.
 2. Keep Anthropic's official **Claude Code** extension enabled.
 3. Run **Extensions: Install from VSIX…** in VS Code.
-4. Select the downloaded `claude-manager-personal-2.15.6.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
+4. Select the downloaded `claude-manager-personal-2.15.7.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
 
 This installer is distributed through GitHub and GitHub Pages, not the Marketplace. Building does not install it or change your accounts. On another machine, sign in to Claude and save each account again. Account snapshots, vault keys and local settings are not bundled or synchronized.
 
-To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.6.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
+To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.7.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
 
 ## Your two-account workflow
 

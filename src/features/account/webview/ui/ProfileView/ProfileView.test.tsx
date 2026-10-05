@@ -209,3 +209,14 @@ describe("ProfileView", () => {
     expect(api.launchSlash).toHaveBeenCalledWith("/login");
   });
 });
+
+describe("saved account storage warning", () => {
+  beforeEach(() => _resetAccountState());
+  it("keeps unreadable accounts discoverable while signed out", () => {
+    const api=stubApi();
+    render(h(ProfileView, { data: makeData({ signedIn: false }, { profileStorageIssues: [{ slug: "account-1", code: "profile-unreadable", detail: "Saved account could not be read." }] }), api }));
+    expect(screen.getByRole("alert").textContent).toContain("still stored");
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    expect(api.openAccountSwitcher).toHaveBeenCalledTimes(1);
+  });
+});

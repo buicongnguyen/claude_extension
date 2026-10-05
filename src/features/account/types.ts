@@ -421,6 +421,8 @@ export interface AccountData {
    * the user hasn't saved any profile yet.
    */
   savedProfiles: SavedProfile[];
+  /** Saved slots that remain on disk but cannot be read; never contains credentials. */
+  profileStorageIssues?: import("./profiles").ProfileListingIssue[];
   /**
    * Slug of the profile whose credentials match the live
    * ~/.claude/.credentials.json. Null when the active account has not

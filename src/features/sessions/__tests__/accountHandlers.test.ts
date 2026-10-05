@@ -4,10 +4,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // only the getAccountData dispatch + model-revalidation re-push, not real disk
 // or CLI I/O. vi.hoisted runs before the hoisted vi.mock factories so the
 // spies exist by the time the factories close over them.
-const { revalidateModelCache, parseAccountData, postAccountData } = vi.hoisted(() => ({
+const { revalidateModelCache, parseAccountData, postAccountData, saveProfile } = vi.hoisted(() => ({
   revalidateModelCache: vi.fn<[], Promise<boolean>>(),
   parseAccountData: vi.fn((_ws?: string) => ({ marker: "account" }) as unknown),
   postAccountData: vi.fn(),
+  saveProfile: vi.fn(),
 }));
 let workspace: string | undefined = "/ws";
 
@@ -25,7 +26,7 @@ vi.mock("../../account/statuslineInstall", () => ({
   uninstallStatusline: vi.fn(),
 }));
 vi.mock("../../account/profiles", () => ({
-  saveProfile: vi.fn(),
+  saveProfile,
   updateProfile: vi.fn(),
   listProfiles: () => [],
 }));
@@ -34,7 +35,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { handleAccountMessage } from "../accountHandlers";
+import { handleAccountMessage, promptToSaveProfile } from "../accountHandlers";
 import type { HostContext } from "../hostContext";
 import type { WebviewMessage } from "../types";
 
@@ -149,5 +150,34 @@ describe("handleAccountMessage — saveStatsImage", () => {
     );
 
     expect(fs.existsSync(target)).toBe(false);
+  });
+});
+
+describe("native save without a webview", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks(); vi.clearAllMocks();
+    parseAccountData.mockReturnValue({ profile: { email: "bob@example.test" } });
+    saveProfile.mockReturnValue({ ok: true, data: { slug: "account-2" } });
+  });
+  function noPanel() {
+    return { getWebview: () => undefined, globalState: { get: () => true, update: vi.fn() } } as unknown as HostContext;
+  }
+  it("persists the account through native prompts even with no panel", async () => {
+    vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("Account 2");
+    expect(await promptToSaveProfile(noPanel())).toBe(true);
+    expect(saveProfile).toHaveBeenCalledWith("Account 2");
+    expect(postAccountData).not.toHaveBeenCalled();
+  });
+  it("reports cancellation without saving or switching", async () => {
+    vi.spyOn(vscode.window, "showInputBox").mockResolvedValue(undefined);
+    expect(await promptToSaveProfile(noPanel())).toBe(false);
+    expect(saveProfile).not.toHaveBeenCalled();
+  });
+  it("reports a failed save so callers leave the active account alone", async () => {
+    vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("Account 2");
+    saveProfile.mockReturnValue({ ok: false, error: "copy-failed" });
+    const error = vi.spyOn(vscode.window, "showErrorMessage").mockResolvedValue(undefined);
+    expect(await promptToSaveProfile(noPanel())).toBe(false);
+    expect(error).toHaveBeenCalled();
   });
 });

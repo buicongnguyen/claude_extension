@@ -260,52 +260,72 @@ function readSnapshotMeta(slotDir: string): Partial<SavedProfile> {
   return snapshotMeta(readAccountSnapshot(slotDir));
 }
 
-/**
- * List every saved profile. Returns [] when the directory does not
- * exist; callers treat that as "no profiles yet" (the common case on a
- * fresh install). Slots missing a credentials file are dropped — they
- * can't be switched to anyway, and surfacing them would confuse users.
- */
-export function listProfiles(): SavedProfile[] {
+/** Non-secret listing diagnostics; never contain filesystem or decryption errors. */
+export interface ProfileListingIssue {
+  slug: string | null;
+  code: "profile-unreadable" | "storage-unavailable";
+  detail: string;
+}
+export interface ProfileListing {
+  profiles: SavedProfile[];
+  issues: ProfileListingIssue[];
+}
+
+/** Read usable accounts and report stored slots that cannot be unlocked. */
+export function readProfileListing(): ProfileListing {
+  const profiles: SavedProfile[] = [];
+  const issues: ProfileListingIssue[] = [];
+  const storageUnavailable = (): ProfileListing => ({
+    profiles,
+    issues: [{ slug: null, code: "storage-unavailable", detail: "Saved-account storage could not be read. Existing profiles have not been changed." }],
+  });
+  let directory: string;
+  try { directory = getProfileDirectory(); }
+  catch { return storageUnavailable(); }
   let entries: string[];
-  try {
-    entries = fs.readdirSync(getProfileDirectory());
-  } catch {
-    return [];
+  try { entries = fs.readdirSync(directory); }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { profiles, issues } : storageUnavailable();
   }
 
-  const out: SavedProfile[] = [];
   for (const slug of entries) {
-    let slotDir: string;
+    // Recovery records and unrelated files are not profile slots.
+    if (!/^[a-z0-9_-]+$/.test(slug)) continue;
     try {
-      slotDir = slotDirectory(slug);
+      const slotDir = slotDirectory(slug);
       if (!fs.statSync(slotDir).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    let credHash: string;
-    let meta: Partial<SavedProfile>;
-    try {
       const snapshot = readAccountSnapshot(slotDir);
-      credHash = hashCredentials(snapshot.credsRaw);
-      meta = snapshotMeta(snapshot);
-    } catch { continue; }
-    out.push({
-      slug,
-      label: meta.label ?? meta.email ?? slug,
-      email: meta.email ?? "",
-      organizationName: meta.organizationName ?? "",
-      subscriptionType: meta.subscriptionType ?? "",
-      savedAt: meta.savedAt ?? "",
-      tokenExpiresAt: meta.tokenExpiresAt ?? 0,
-      credentialsHash: credHash,
-      userID: meta.userID ?? "",
-      accountUuid: meta.accountUuid ?? "",
-    });
+      const credHash = hashCredentials(snapshot.credsRaw);
+      const meta = snapshotMeta(snapshot);
+      profiles.push({
+        slug,
+        label: meta.label ?? meta.email ?? slug,
+        email: meta.email ?? "",
+        organizationName: meta.organizationName ?? "",
+        subscriptionType: meta.subscriptionType ?? "",
+        savedAt: meta.savedAt ?? "",
+        tokenExpiresAt: meta.tokenExpiresAt ?? 0,
+        credentialsHash: credHash,
+        userID: meta.userID ?? "",
+        accountUuid: meta.accountUuid ?? "",
+      });
+    } catch {
+      issues.push({
+        slug,
+        code: "profile-unreadable",
+        detail: "This saved profile is still stored, but its account snapshot could not be unlocked.",
+      });
+    }
   }
+  profiles.sort((a, b) => a.label.localeCompare(b.label));
+  issues.sort((a, b) => (a.slug ?? "").localeCompare(b.slug ?? ""));
+  return { profiles, issues };
+}
 
-  out.sort((a, b) => a.label.localeCompare(b.label));
-  return out;
+/** Compatibility surface for callers that only need usable profiles. */
+export function listProfiles(): SavedProfile[] {
+  return readProfileListing().profiles;
 }
 
 /**
@@ -425,7 +445,11 @@ function activeProfileForCredentials(live: LiveCredentials, knownProfiles?: Save
   if (liveIdentity.email) {
     const emailLower = liveIdentity.email.toLowerCase();
     const candidates = profiles
-      .filter((p) => p.email && p.email.toLowerCase() === emailLower)
+      .filter((p) => {
+        // A matching email cannot override two different known account IDs.
+        if (liveIdentity.accountUuid && p.accountUuid && p.accountUuid !== liveIdentity.accountUuid) return false;
+        return p.email && p.email.toLowerCase() === emailLower;
+      })
       .sort(freshestFirst);
     if (candidates[0]) return candidates[0].slug;
   }
@@ -436,6 +460,7 @@ function activeProfileForCredentials(live: LiveCredentials, knownProfiles?: Save
 /** Error codes returned from write operations. Keeps UI text stable. */
 export type ProfileError =
   | "no-active-account"
+  | "unsaved-active-account"
   | "slug-exists"
   | "slot-missing"
   | "copy-failed"
@@ -477,6 +502,20 @@ function saveProfileUnlocked(label: string): ProfileResult<SavedProfile> {
   // don't expose). Merge so we get the broadest possible identity.
   const tokenIdentity = extractIdentityFromToken(credsRaw);
   const jsonIdentity = extractIdentity(claudeJsonRaw);
+  // A login can update credentials before its local identity metadata. Never
+  // capture a new token together with an explicitly different saved identity.
+  // JWT sub/user_id and config userID have different meanings, so only compare
+  // account UUID and email fields that both sources actually provide.
+  if (tokenIdentity && (
+    (tokenIdentity.accountUuid && jsonIdentity.accountUuid && tokenIdentity.accountUuid !== jsonIdentity.accountUuid) ||
+    (tokenIdentity.email && jsonIdentity.email && tokenIdentity.email.toLowerCase() !== jsonIdentity.email.toLowerCase())
+  )) {
+    return {
+      ok: false,
+      error: "account-mismatch",
+      detail: "The current login and Claude's account information do not match. Finish signing in, then retry saving this account. No saved profile was changed.",
+    };
+  }
   const identity: LiveIdentity = {
     accountUuid: tokenIdentity?.accountUuid || jsonIdentity.accountUuid,
     userID: tokenIdentity?.userID || jsonIdentity.userID,
@@ -485,8 +524,9 @@ function saveProfileUnlocked(label: string): ProfileResult<SavedProfile> {
 
   if (identity.accountUuid || identity.userID || identity.email) {
     const existing = listProfiles().find((p) => {
-      if (identity.accountUuid && p.accountUuid && identity.accountUuid === p.accountUuid) {
-        return true;
+      if (identity.accountUuid && p.accountUuid) {
+        // Known different accounts must stay separate even if email/device ID match.
+        return identity.accountUuid === p.accountUuid;
       }
       if (identity.userID && p.userID && identity.userID === p.userID) {
         // userID is device-stable, NOT account-distinct — matching on
@@ -707,6 +747,13 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
   const liveCredentials = readFreshCredentials();
   try {
     const activeSlug = liveCredentials ? activeProfileForCredentials(liveCredentials) : null;
+    if (liveCredentials && !activeSlug) {
+      return {
+        ok: false,
+        error: "unsaved-active-account",
+        detail: "Save the current account as a profile before switching so you can return to it. No account switch was made.",
+      };
+    }
     if (activeSlug === slug) return updateProfileUnlocked(slug, approval);
     if (activeSlug) {
       const saved = updateProfileUnlocked(activeSlug, approval);

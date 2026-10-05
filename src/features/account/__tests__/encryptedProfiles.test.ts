@@ -9,10 +9,11 @@ const fixture = vi.hoisted(() => {
   const home = f.mkdtempSync(p.join(o.tmpdir(), "manager-encrypted-profiles-"));
   return { home, claude: p.join(home, ".claude"), vault: p.join(home, "vault") };
 });
+vi.mock("fs", async (importOriginal) => ({ ...(await importOriginal<typeof import("fs")>()) }));
 vi.mock("os", async (importOriginal) => ({ ...(await importOriginal<typeof import("os")>()), homedir: () => fixture.home }));
 vi.mock("../../../core/config", () => ({ CLAUDE_DIR: fixture.claude }));
 import { closeProfileVault, initializeProfileVault, readProfileFile } from "../profileVault";
-import { getActiveProfileSlug, listProfiles, removeProfile, saveProfile, switchProfile } from "../profiles";
+import { getActiveProfileSlug, listProfiles, readProfileListing, removeProfile, saveProfile, switchProfile } from "../profiles";
 
 import { readAccountSnapshot, SNAPSHOT_FILE } from "../accountSnapshot";
 
@@ -93,5 +94,81 @@ describe("two accounts using the real encrypted vault", () => {
     if (!result.ok) expect(result.detail).toContain("refreshing its credentials");
     expect(fs.readFileSync(liveCredentials, "utf8")).toBe(before);
     expect(fs.existsSync(lock)).toBe(true);
+  });
+});
+
+
+describe("saved-profile listing diagnostics", () => {
+  it("reports a damaged stored slot while still listing the readable account", () => {
+    login("alice"); expect(saveProfile("Account 1").ok).toBe(true);
+    login("bob"); expect(saveProfile("Account 2").ok).toBe(true);
+    const damaged = path.join(fixture.vault, "account-1", SNAPSHOT_FILE);
+    const broken = "damaged snapshot containing synthetic-access-alice";
+    fs.writeFileSync(damaged, broken);
+    fs.writeFileSync(path.join(fixture.vault, ".switch-recovery.enc"), "synthetic-recovery-record");
+
+    const listing = readProfileListing();
+    expect(listing.profiles.map(profile => profile.slug)).toEqual(["account-2"]);
+    expect(listProfiles()).toEqual(listing.profiles);
+    expect(listing.issues).toEqual([{
+      slug: "account-1", code: "profile-unreadable",
+      detail: "This saved profile is still stored, but its account snapshot could not be unlocked.",
+    }]);
+    const publicIssues = JSON.stringify(listing.issues);
+    expect(publicIssues).not.toContain("synthetic-access-alice");
+    expect(publicIssues).not.toContain("synthetic-recovery-record");
+    expect(publicIssues).not.toContain(fixture.home);
+    for (const secret of secrets.values()) expect(publicIssues).not.toContain(secret);
+    expect(fs.readFileSync(damaged, "utf8")).toBe(broken);
+  });
+
+  it("reports temporary snapshot read failures without exposing or changing its bytes", () => {
+    login("alice"); expect(saveProfile("Account 1").ok).toBe(true);
+    const snapshot = path.join(fixture.vault, "account-1", SNAPSHOT_FILE);
+    const before = fs.readFileSync(snapshot, "utf8");
+    const read = fs.readFileSync;
+    const failRead = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (String(file) === snapshot) throw new Error("private error: synthetic-access-alice");
+      return read(file, options as never);
+    });
+    const listing = readProfileListing();
+    expect(listing.profiles).toEqual([]);
+    expect(listing.issues).toMatchObject([{ slug: "account-1", code: "profile-unreadable" }]);
+    expect(JSON.stringify(listing.issues)).not.toContain("private error");
+    expect(JSON.stringify(listing.issues)).not.toContain("synthetic-access-alice");
+    failRead.mockRestore();
+    expect(fs.readFileSync(snapshot, "utf8")).toBe(before);
+    expect(readProfileListing()).toMatchObject({ profiles: [{ slug: "account-1" }], issues: [] });
+  });
+
+  it("distinguishes a locked vault from an empty account list without changing stored profiles", () => {
+    login("alice"); expect(saveProfile("Account 1").ok).toBe(true);
+    const snapshot = path.join(fixture.vault, "account-1", SNAPSHOT_FILE);
+    const before = fs.readFileSync(snapshot, "utf8");
+    closeProfileVault();
+    expect(readProfileListing()).toEqual({
+      profiles: [], issues: [{ slug: null, code: "storage-unavailable",
+        detail: "Saved-account storage could not be read. Existing profiles have not been changed." }],
+    });
+    expect(listProfiles()).toEqual([]);
+    expect(fs.readFileSync(snapshot, "utf8")).toBe(before);
+  });
+
+  it("reports vault directory access failures with a fixed non-secret message", () => {
+    vi.spyOn(fs, "readdirSync").mockImplementation(() => {
+      throw Object.assign(new Error("private directory error: synthetic-access-alice"), { code: "EACCES" });
+    });
+    const listing = readProfileListing();
+    expect(listing).toMatchObject({ profiles: [], issues: [{ slug: null, code: "storage-unavailable" }] });
+    expect(JSON.stringify(listing.issues)).not.toContain("private directory error");
+    expect(JSON.stringify(listing.issues)).not.toContain("synthetic-access-alice");
+  });
+
+  it("keeps a missing directory equivalent to an empty listing for compatibility", () => {
+    vi.spyOn(fs, "readdirSync").mockImplementation(() => {
+      throw Object.assign(new Error("missing directory"), { code: "ENOENT" });
+    });
+    expect(readProfileListing()).toEqual({ profiles: [], issues: [] });
+    expect(listProfiles()).toEqual([]);
   });
 });

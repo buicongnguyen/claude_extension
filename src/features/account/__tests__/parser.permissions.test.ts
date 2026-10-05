@@ -49,7 +49,7 @@ vi.mock("../../../core/config", () => ({
 // strictly about permission/settings reading, not CLI discovery or profiles.
 vi.mock("../models", () => ({ discoverModelsFromCli: () => [] }));
 vi.mock("../profiles", () => ({
-  listProfiles: () => [],
+  readProfileListing: () => ({ profiles: [], issues: [] }),
   getActiveProfileSlug: () => null,
 }));
 vi.mock("../credentials", () => ({ readCredentials: () => null }));
