@@ -23,6 +23,10 @@ const resumeSession = v.object({
   fresh: v.optional(v.boolean()),
   continueTask: v.optional(v.boolean()),
 });
+const waitAndContinueSession = v.object({
+  type: v.literal("waitAndContinueSession"),
+  sessionId: v.string(),
+});
 const resumeMultiple = v.object({
   type: v.literal("resumeMultiple"),
   sessionIds: v.array(v.string()),
@@ -455,6 +459,7 @@ export const messageSchema = v.variant("type", [
   promoteTempSession,
   continueLastSession,
   resumeSession,
+  waitAndContinueSession,
   resumeMultiple,
   getSessionDetail,
   pinSession,

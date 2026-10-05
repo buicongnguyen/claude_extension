@@ -495,3 +495,39 @@ describe("cancelled terminal launch", () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+// Native auto-continue launches bypass the shell while retaining Manager terminal policy.
+import { createNativeTerminal, setTerminalRegistry } from "../terminal";
+describe("createNativeTerminal", () => {
+  it("uses literal native argv in a fresh terminal and registers its session", () => {
+    const existing = makeTerminal({ name: "waiting" });
+    vscode.window.terminals.push(existing);
+    const register = vi.fn();
+    setTerminalRegistry({ register });
+    try {
+      const args = ["--settings", '{"autoContinueAtUsageLimit":true}', "$(literal)", 'quoted "input"'];
+      const executable = "C:\\user with spaces\\claude.exe";
+      const term = createNativeTerminal("waiting", executable, args, "/project with spaces", "session-1");
+      expect(term).not.toBe(existing);
+      expect((term as unknown as MockTerminal).createOptions).toMatchObject({
+        shellPath: executable, shellArgs: args, cwd: "/project with spaces", isTransient: true,
+      });
+      expect((term as unknown as MockTerminal).sentText).toEqual([]);
+      expect(register).toHaveBeenCalledWith("session-1", term);
+      args.push("later mutation");
+      expect((term as unknown as MockTerminal).createOptions?.shellArgs).not.toContain("later mutation");
+    } finally { setTerminalRegistry(undefined); }
+  });
+
+  it("respects the panel preference", () => {
+    setConfig({ location: "panel" });
+    const term = createNativeTerminal("waiting", "/native/claude", ["--resume", "id"], "/repo");
+    expect((term as unknown as MockTerminal).createOptions?.location).toBeUndefined();
+  });
+
+  it("respects the selected editor column", () => {
+    setConfig({ location: "editor", editorPosition: "two" });
+    const term = createNativeTerminal("waiting", "/native/claude", ["--resume", "id"], "/repo");
+    expect((term as unknown as MockTerminal).createOptions?.location).toEqual({ viewColumn: vscode.ViewColumn.Two });
+  });
+});

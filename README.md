@@ -1,10 +1,20 @@
 # Claude Code Manager Personal
 
-A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.7**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
+A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.8**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
 
 It keeps the upstream session browser, account picker, usage display, MCP configuration and other tools. The changes focus on saving two accounts and switching manually between them.
 
+## Wait and auto-continue
+
+Open a conversation in Manager and choose **Wait and auto-continue**. Close the existing Claude chat or CLI for that conversation, then confirm. Manager opens the **same saved conversation in a terminal**, with one continuation request and automatic waiting enabled for that launch only. If usage is already available, work starts immediately.
+
+Requires the native Claude Code CLI **2.1.234 or later** and an eligible Claude subscription session. Keep VS Code and the terminal open, and the computer awake. Reloading or closing VS Code ends this waiting terminal; enable it again afterward. Normal permission prompts can still pause work. Press **Ctrl+C** to cancel a wait, or close the terminal to stop. If waiting is not offered automatically, check **/rate-limit-options** in that terminal.
+
+This does not send into Anthropic's graphical chat panel or change global settings. Managed policy can prevent automatic waiting; API billing has no subscription-reset wait. Long sleep may require Enter, and Claude limits consecutive automatic waits. See [feature and verification details](docs/AUTO-CONTINUE-2.15.8.md).
+
 ## Changes
+
+- Version 2.15.8 adds per-conversation **Wait and auto-continue**, native CLI version checks, literal launch arguments and duplicate-terminal protection.
 
 - Version 2.15.7 protects unsaved accounts before switching, fixes native saving without an open Manager panel, and shows unreadable saved accounts instead of hiding them. See [the account preservation fixes](docs/ACCOUNT-PRESERVATION-2.15.7.md).
 
@@ -27,11 +37,11 @@ Download the installer from the [download page](https://buicongnguyen.github.io/
 1. Disable or uninstall the original **Claude Code Manager** (`vishalguptax.claude-manager`). Both versions share command/view IDs.
 2. Keep Anthropic's official **Claude Code** extension enabled.
 3. Run **Extensions: Install from VSIX…** in VS Code.
-4. Select the downloaded `claude-manager-personal-2.15.7.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
+4. Select the downloaded `claude-manager-personal-2.15.8.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
 
 This installer is distributed through GitHub and GitHub Pages, not the Marketplace. Building does not install it or change your accounts. On another machine, sign in to Claude and save each account again. Account snapshots, vault keys and local settings are not bundled or synchronized.
 
-To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.7.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
+To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.8.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
 
 ## Your two-account workflow
 
@@ -49,7 +59,7 @@ The Play button now means **Continue task**. It opens the same saved conversatio
 
 To stay in your existing Claude chat, send **Continue from where you stopped** there. You do not need to close it or change accounts for this manual approach.
 
-**Open conversation** only opens saved history in your configured destination. It does not submit a request. The official extension's [open URI](https://code.claude.com/docs/en/vs-code#launch-a-vs-code-tab-from-other-tools) can prefill a draft but cannot submit it, and its installed 2.1.285 command ignores prompts for an already open panel. Manager therefore uses the documented [CLI resume-with-prompt invocation](https://code.claude.com/docs/en/cli-reference) for Continue task.
+**Open conversation** only opens saved history in your configured destination. It does not submit a request. The official extension's [open URI](https://code.claude.com/docs/en/vs-code#launch-a-vs-code-tab-from-other-tools) can prefill a draft but cannot submit it, and its inspected 2.1.289 command ignores prompts for an already open panel. Manager therefore uses the documented [CLI resume-with-prompt invocation](https://code.claude.com/docs/en/cli-reference) for Continue task.
 
 Continue task requires a working standalone `claude` command. If your terminal reports that it is missing, install the CLI before retrying. Claude can still pause for its normal permissions or other input. A real server usage-limit transition has not been tested during this review.
 

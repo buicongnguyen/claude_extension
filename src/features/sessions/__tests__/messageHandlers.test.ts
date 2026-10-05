@@ -12,6 +12,7 @@ import * as vscode from "vscode";
 import type { Session } from "../types";
 import type { HostContext } from "../hostContext";
 
+const waitAndContinue = vi.fn(async (_id: string, _sessions: Session[]) => {});
 const continueTask = vi.fn(async (_id: string, _sessions: Session[]) => {});
 const freshResume = vi.fn(async (_id: string, _sessions: Session[]) => {});
 
@@ -23,6 +24,7 @@ vi.mock("../commands", async () => {
   const actual = await vi.importActual<typeof import("../commands")>("../commands");
   return {
     ...actual,
+    waitAndContinueSession: (id: string, sessions: Session[]) => waitAndContinue(id, sessions),
     continueStoppedTask: (id: string, sessions: Session[]) => continueTask(id, sessions),
     resumeAfterAccountSwitch: (id: string, sessions: Session[]) => freshResume(id, sessions),
     resumeSession: (id: string, fork: boolean, sessions: Session[], forceTerminal?: boolean) =>
@@ -330,4 +332,12 @@ describe("Continue task dispatch", () => {
     await dispatch({ type: "resumeSession", sessionId: "chat-1", continueTask: true, fresh: true }, ctx);
     expect(error).toHaveBeenCalled(); expect(continueTask).not.toHaveBeenCalled(); expect(freshResume).not.toHaveBeenCalled();
   });
+});
+
+it("dispatches the dedicated auto-continue action without changing normal Resume", async () => {
+  const sessions = [session({ id: "chat-1" })]; const { ctx } = harness(sessions);
+  await dispatch({ type: "waitAndContinueSession", sessionId: "chat-1" }, ctx);
+  expect(waitAndContinue).toHaveBeenCalledWith("chat-1", sessions);
+  expect(resumeSession).not.toHaveBeenCalled();
+  expect(continueTask).not.toHaveBeenCalled();
 });

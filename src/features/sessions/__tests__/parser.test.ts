@@ -24,6 +24,11 @@ vi.mock("../../../core/config", () => ({
 }));
 
 function setup() {
+  // Recreating the same fixture paths can reuse filesystem timestamps. Keep
+  // independent cases from inheriting a file index or metadata from a prior case.
+  clearMetaCaches();
+  clearOrphanCache();
+  clearPendingCache();
   fs.rmSync(CLAUDE_DIR, { recursive: true, force: true });
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });

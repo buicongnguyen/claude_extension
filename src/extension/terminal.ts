@@ -313,3 +313,26 @@ export function createTerminal(name: string, cwd?: string, sessionId?: string): 
   if (sessionId) terminalRegistry?.register(sessionId, term);
   return term;
 }
+
+/** Start an interactive native client directly, without shell parsing or terminal reuse. */
+export function createNativeTerminal(
+  name: string,
+  executable: string,
+  args: readonly string[],
+  cwd?: string,
+  sessionId?: string,
+): vscode.Terminal {
+  const location = getTerminalLocation();
+  const term = vscode.window.createTerminal({
+    name,
+    cwd: cwd || undefined,
+    shellPath: executable,
+    shellArgs: [...args],
+    // Never replay the initial continuation prompt through terminal revival.
+    isTransient: true,
+    ...(location ? { location } : {}),
+  });
+  sentTo.add(term);
+  if (sessionId) terminalRegistry?.register(sessionId, term);
+  return term;
+}

@@ -326,6 +326,7 @@ export type WebviewMessage =
   | { type: "search"; query: string }
   | { type: "filter"; project?: string; branch?: string; dateRange?: [number, number] }
   | { type: "resumeSession"; sessionId: string; entrypoint?: string; projectPath?: string; fresh?: boolean; continueTask?: boolean }
+  | { type: "waitAndContinueSession"; sessionId: string }
   /**
    * Recreate a Claude-created worktree that has since been removed from disk,
    * then resume the session inside it. Host runs `git worktree add <path>

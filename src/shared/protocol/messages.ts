@@ -46,6 +46,7 @@ export type Message =
       fresh?: boolean;
       continueTask?: boolean;
     }
+  | { type: "waitAndContinueSession"; sessionId: string }
   | { type: "resumeMultiple"; sessionIds: string[]; projectPaths?: string[] }
   | { type: "getSessionDetail"; sessionId: string; mode?: DetailMode; query?: string }
   | { type: "pinSession"; sessionId: string }
@@ -286,6 +287,7 @@ type WebviewMessageType =
   | "promoteTempSession"
   | "continueLastSession"
   | "resumeSession"
+  | "waitAndContinueSession"
   | "resumeMultiple"
   | "getSessionDetail"
   | "pinSession"

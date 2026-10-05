@@ -48,6 +48,10 @@ export const sendResumeSession = (
 export const sendContinueTask = (sessionId: string): void =>
   post({ type: "resumeSession", sessionId, continueTask: true });
 
+/** Resume in a terminal that automatically continues after a usage-limit reset. */
+export const sendWaitAndContinueSession = (sessionId: string): void =>
+  post({ type: "waitAndContinueSession", sessionId });
+
 /** Reopen a transcript with a fresh client after the user closes the old client. */
 export const sendFreshResume = (sessionId: string): void =>
   post({ type: "resumeSession", sessionId, fresh: true });

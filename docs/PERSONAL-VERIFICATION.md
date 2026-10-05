@@ -1,5 +1,15 @@
 # Personal fork verification
 
+## Version 2.15.8 — wait and auto-continue
+
+The conversation detail action now hands the same saved session to an interactive native CLI with invocation-only automatic waiting enabled. It requires a trusted open project, supported CLI version and explicit confirmation. Native argv avoids shell quoting, default permissions remain active, duplicate clicks focus the existing terminal, and terminal persistence is disabled to prevent prompt replay after reload. See [feature details](AUTO-CONTINUE-2.15.8.md).
+
+- Final full suite: **4,057 passed / 19 failed** (4,076 tests, 302 files). Failed identities match all 19 known upstream Windows failures from 2.15.7 exactly; no new failures and no missing baseline failures. See [validation](VALIDATION-2.15.8.json).
+- Sixty-two added regressions cover protocol/UI, host cancellation/trust/project routing, native version discovery, literal arguments, terminal lifecycle and restored process mapping.
+- Two unrelated parser fixture failures reproduced independently; clearing caches between recreated test folders fixed the test isolation issue. Production parser code is unchanged.
+- TypeScript, configured Biome and extension/webview/CSS builds passed. This machine's native CLI reports 2.1.288, above the required 2.1.234.
+- Tests use isolated fixtures and mocked terminal launches. No real Claude requests, credentials, account switches or live quota resets were exercised.
+
 ## Version 2.15.7 — account preservation and terminal login
 
 Saved-account disappearance and native CLI launch paths received another code and logic review. See [ACCOUNT-PRESERVATION-2.15.7.md](ACCOUNT-PRESERVATION-2.15.7.md) and [the validation summary](https://github.com/buicongnguyen/claude_extension/blob/main/docs/VALIDATION-2.15.7.json).

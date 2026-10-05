@@ -51,6 +51,7 @@ import {
   resumeSession,
   resumeAfterAccountSwitch,
   continueStoppedTask,
+  waitAndContinueSession,
   createWorktreeForSession,
   exportSessionFile,
   bulkExportSessionFiles,
@@ -595,6 +596,10 @@ async function handleSessionMessage(
       } else if (msg.continueTask) await continueStoppedTask(msg.sessionId, ctx.getSessions());
       else if (msg.fresh) await resumeAfterAccountSwitch(msg.sessionId, ctx.getSessions());
       else await resumeSession(msg.sessionId, false, ctx.getSessions());
+      break;
+
+    case "waitAndContinueSession":
+      await waitAndContinueSession(msg.sessionId, ctx.getSessions());
       break;
 
     case "createWorktree":

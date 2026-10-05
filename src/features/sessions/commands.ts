@@ -25,7 +25,9 @@ import {
   isExtensionEntrypoint,
 } from "../../extension/claudeCodeExtension";
 import { normPath } from "../../core/utils";
+import { CONTINUE_TASK_PROMPT } from "../../core/sessionContinuation";
 import { PROJECTS_DIR } from "../../core/config";
+import { prepareAutoContinue, launchAutoContinue, focusAutoContinueSession } from "./autoContinue";
 import {
   slugifyProjectPath,
   validatePortableSession,
@@ -316,7 +318,7 @@ function sharesWorkspaceRepo(cwd: string, workspace: string): boolean {
     normPath(sessionTree.repoRoot) === normPath(workspaceTree.repoRoot));
 }
 
-export const CONTINUE_TASK_PROMPT = "Continue the interrupted task from where you stopped. Check existing progress before repeating any actions.";
+export { CONTINUE_TASK_PROMPT } from "../../core/sessionContinuation";
 
 /**
  * Resume or fork a Claude session.
@@ -341,6 +343,7 @@ export async function resumeSession(
   sessions: Session[],
   forceTerminal = false,
   submitContinuation = false,
+  terminalLauncher?: (name: string, cwd: string, sessionId: string) => void,
 ): Promise<void> {
   // The id comes from transcript metadata and a webview message, and becomes
   // a shell argument. Reject metacharacters rather than interpolate them.
@@ -358,6 +361,12 @@ export async function resumeSession(
   // Fixed ASCII text contains no shell expansions. A CLI argument is submitted
   // after Claude loads the transcript; no readiness timer types into the shell.
   const cmd = submitContinuation ? `${baseCommand} "${CONTINUE_TASK_PROMPT}"` : baseCommand;
+  const openTerminal = (directory: string): void => {
+    if (terminalLauncher) { terminalLauncher(termName, directory, sessionId); return; }
+    const term = createTerminal(termName, directory, sessionId);
+    term.show();
+    runInTerminal(term, cmd);
+  };
   const ws = getWorkspace();
   clearWorktreeCache();
   const siblingCheckout = sharesWorkspaceRepo(cwd, ws);
@@ -367,7 +376,7 @@ export async function resumeSession(
   // the target up-front so we know whether a cross-workspace hop needs
   // to be paired with a delayed URI.
   const target: ResumeTarget =
-    fork || forceTerminal || submitContinuation || siblingCheckout ? "terminal" : await resolveClaudeTarget(sess);
+    fork || forceTerminal || submitContinuation || terminalLauncher || siblingCheckout ? "terminal" : await resolveClaudeTarget(sess);
 
   if (target === "cancel") return;
 
@@ -424,9 +433,7 @@ export async function resumeSession(
         );
         if (!choice) return;
         if (choice === "Open worktree") {
-          const term = createTerminal(termName, other.path, sessionId);
-          term.show();
-          runInTerminal(term, cmd);
+          openTerminal(other.path);
           return;
         }
         // "Resume Anyway" falls through to the router below (resume in place).
@@ -463,9 +470,7 @@ export async function resumeSession(
             vscode.window.showErrorMessage(`Could not switch to branch "${safe}". Resolve the Git checkout conflict, then try Resume again.`);
             return;
           }
-          const term = createTerminal(termName, cwd, sessionId);
-          term.show();
-          runInTerminal(term, cmd);
+          openTerminal(cwd);
           return;
         }
         // "Resume Anyway" falls through to the router below.
@@ -485,12 +490,67 @@ export async function resumeSession(
     if (choice !== "Resume in terminal") return;
   }
 
-  const term = createTerminal(termName, cwd, sessionId);
-  term.show();
-  runInTerminal(term, cmd);
+  openTerminal(cwd);
 }
 
 const sessionRestartsInProgress = new Set<string>();
+
+/** Opt in once per conversation; the interactive CLI owns quota waiting and cancellation. */
+export async function waitAndContinueSession(sessionId: string, sessions: Session[]): Promise<void> {
+  if (sessionRestartsInProgress.has(sessionId)) return;
+  sessionRestartsInProgress.add(sessionId);
+  try {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session || !/^[A-Za-z0-9-]{1,128}$/.test(sessionId)) {
+      vscode.window.showErrorMessage("Session not found or invalid. Refresh Manager before continuing.");
+      return;
+    }
+    if (!vscode.workspace.isTrusted) {
+      vscode.window.showErrorMessage("Trust this workspace before enabling automatic continuation.");
+      return;
+    }
+    if (focusAutoContinueSession(sessionId)) return;
+    const workspace = getWorkspace();
+    clearWorktreeCache();
+    if (!workspace || (normPath(workspace) !== normPath(session.projectPath) &&
+        !sharesWorkspaceRepo(session.projectPath, workspace))) {
+      vscode.window.showInformationMessage("Open this session's project first, then choose Wait and auto-continue there.");
+      return;
+    }
+    try {
+      if (!session.projectPath || !path.isAbsolute(session.projectPath) || !fs.statSync(session.projectPath).isDirectory()) throw new Error("Missing folder");
+    } catch {
+      vscode.window.showErrorMessage("This session's folder is unavailable. Restore or open its project before enabling automatic continuation.");
+      return;
+    }
+    const plan = await prepareAutoContinue();
+    if (!plan) return;
+    const choice = await vscode.window.showWarningMessage(
+      "Wait and auto-continue this conversation in a terminal?",
+      { modal: true, detail: "Close this conversation's existing Claude chat or CLI first. Manager will submit a continuation request in the same saved conversation. If usage is available, work starts now; otherwise the Claude terminal can wait for the subscription reset and continue. Keep VS Code and this terminal open, and the computer awake. Reloading VS Code ends this terminal. Normal permission prompts still apply. Press Ctrl+C in the terminal to cancel the wait, or close it to stop. Claude may require sign-in or /rate-limit-options; account and managed settings can prevent waiting." },
+      "Old session closed — enable",
+    );
+    if (choice !== "Old session closed — enable") return;
+    await resumeSession(sessionId, false, sessions, true, false, (name, cwd, id) => {
+      // Re-check at the final launch boundary after version checks and dialogs.
+      const currentWorkspace = getWorkspace();
+      clearWorktreeCache();
+      if (!vscode.workspace.isTrusted || !currentWorkspace || (normPath(currentWorkspace) !== normPath(cwd) && !sharesWorkspaceRepo(cwd, currentWorkspace))) {
+        vscode.window.showErrorMessage("The trusted project changed while enabling continuation. Open the session's project and try again.");
+        return;
+      }
+      try {
+        if (!fs.statSync(cwd).isDirectory()) throw new Error("Missing folder");
+      } catch {
+        vscode.window.showErrorMessage("The session folder is no longer available. Restore it before continuing.");
+        return;
+      }
+      launchAutoContinue(plan, name, cwd, id, CONTINUE_TASK_PROMPT);
+    });
+  } finally {
+    sessionRestartsInProgress.delete(sessionId);
+  }
+}
 
 /** Explicit continuation after the usage reset. Opening history alone does
  * not send a turn, and the official chat has no external submit command. */

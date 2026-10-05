@@ -96,9 +96,15 @@ export function startActiveSessionWatcher(registry: TerminalRegistry): vscode.Di
     const entries = await filterReusedPpids(snapshot);
     if (disposed) return;
     const byPpid = new Map<number, ActiveEntry>();
+    const byClaudePid = new Map<number, ActiveEntry>();
     for (const entry of entries) {
       // The CLI can exit while the OS query is pending.
       if (!isProcessAlive(entry.claudePid)) continue;
+      // Direct native terminals run Claude as their shell process. The entry
+      // already passed CLI liveness and process-start verification above.
+      if (!byClaudePid.has(entry.claudePid) || byClaudePid.get(entry.claudePid)!.ts <= entry.ts) {
+        byClaudePid.set(entry.claudePid, entry);
+      }
       for (const pid of entry.terminalPids) {
         if (!byPpid.has(pid) || byPpid.get(pid)!.ts <= entry.ts) byPpid.set(pid, entry);
       }
@@ -108,7 +114,7 @@ export function startActiveSessionWatcher(registry: TerminalRegistry): vscode.Di
       let pid: number | undefined;
       try { pid = await terminal.processId; } catch { continue; }
       if (disposed) return;
-      const entry = pid === undefined ? undefined : byPpid.get(pid);
+      const entry = pid === undefined ? undefined : byClaudePid.get(pid) ?? byPpid.get(pid);
       if (!entry || !vscode.window.terminals.includes(terminal)) continue;
       const source = { claudePid: entry.claudePid, ts: entry.ts };
       next.set(terminal, { sessionId: entry.sessionId, source });

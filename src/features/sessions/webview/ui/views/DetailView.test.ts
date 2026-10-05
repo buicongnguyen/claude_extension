@@ -324,3 +324,57 @@ describe("DetailView — continue task after usage reset", () => {
     expect(getByRole("button", { name: "Open proj" })).toBeTruthy();
   });
 });
+
+
+describe("DetailView — wait and auto-continue", () => {
+  beforeEach(() => {
+    _resetSessionsSignals(); post.mockClear(); currentProjectSignal.value = "proj";
+  });
+
+  it("offers a clock action that requests continuation in a new terminal", () => {
+    detailSignal.value = detail({ isLive: false });
+    const { getByRole } = render(h(DetailView, {}));
+    const button = getByRole("button", { name: "Wait and auto-continue" });
+    expect(button.getAttribute("title")).toContain("new terminal");
+    expect(button.getAttribute("title")).toContain("usage limit resets");
+    expect(button.querySelector('svg[data-icon="clock"]')).toBeTruthy();
+    post.mockClear();
+    fireEvent.click(button);
+    expect(post).toHaveBeenCalledExactlyOnceWith({ type: "waitAndContinueSession", sessionId: "a" });
+  });
+
+  it("remains available for a stopped official chat whose process is still live", () => {
+    detailSignal.value = detail({ entrypoint: "claude-vscode", isLive: true, status: "idle" });
+    const { getByRole } = render(h(DetailView, {}));
+    expect(getByRole("button", { name: "View" })).toBeTruthy();
+    post.mockClear();
+    fireEvent.click(getByRole("button", { name: "Wait and auto-continue" }));
+    expect(post).toHaveBeenCalledExactlyOnceWith({ type: "waitAndContinueSession", sessionId: "a" });
+  });
+
+  it("is available for an existing sibling worktree of the current repository", async () => {
+    const { setWorkspacePath } = await import("../../model");
+    setWorkspacePath("/repo");
+    worktreesSignal.value = { main: ref({ path: "/repo", kind: "main" }), a: ref() };
+    detailSignal.value = detail({ projectKey: "sibling-worktree", projectPath: "/repo/.claude/worktrees/feat" });
+    const { getByRole } = render(h(DetailView, {}));
+    post.mockClear();
+    fireEvent.click(getByRole("button", { name: "Wait and auto-continue" }));
+    expect(post).toHaveBeenCalledExactlyOnceWith({ type: "waitAndContinueSession", sessionId: "a" });
+  });
+
+  it.each(["claude", "user"] as const)("is unavailable when the %s checkout is missing", kind => {
+    worktreesSignal.value = { a: ref({ exists: false, kind }) };
+    detailSignal.value = detail();
+    const { queryByRole } = render(h(DetailView, {}));
+    expect(queryByRole("button", { name: "Wait and auto-continue" })).toBeNull();
+  });
+
+  it("requires opening an unrelated project before offering wait-and-continue", () => {
+    currentProjectSignal.value = "other";
+    detailSignal.value = detail();
+    const { queryByRole, getByRole } = render(h(DetailView, {}));
+    expect(queryByRole("button", { name: "Wait and auto-continue" })).toBeNull();
+    expect(getByRole("button", { name: "Open proj" })).toBeTruthy();
+  });
+});

@@ -319,3 +319,16 @@ it("preserves the Continue task flag and rejects a non-boolean", () => {
   expect(parseMessage({ type: "resumeSession", sessionId: "a", continueTask: true })).toEqual({ type: "resumeSession", sessionId: "a", continueTask: true });
   expect(() => parseMessage({ type: "resumeSession", sessionId: "a", continueTask: "true" })).toThrow();
 });
+
+
+it("preserves the dedicated wait-and-continue request without resume flags", () => {
+  roundTrip({ type: "waitAndContinueSession", sessionId: "a" });
+  expect(parseMessage({ type: "waitAndContinueSession", sessionId: "a", fresh: true, continueTask: true })).toEqual({
+    type: "waitAndContinueSession", sessionId: "a",
+  });
+});
+
+it("requires a string session id for wait-and-continue", () => {
+  expect(() => parseMessage({ type: "waitAndContinueSession" })).toThrow();
+  expect(() => parseMessage({ type: "waitAndContinueSession", sessionId: 42 })).toThrow();
+});

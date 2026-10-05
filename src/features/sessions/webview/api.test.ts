@@ -70,3 +70,9 @@ it("sendContinueTask requests a submitted task continuation without account-swit
     continueTask: true,
   });
 });
+
+
+it("sendWaitAndContinueSession posts only the dedicated conversation request", () => {
+  api.sendWaitAndContinueSession("id");
+  expect(post).toHaveBeenCalledExactlyOnceWith({ type: "waitAndContinueSession", sessionId: "id" });
+});

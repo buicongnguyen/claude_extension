@@ -140,3 +140,38 @@ describe("transient advisory registry reads", () => {
     watcher.dispose(); registry.dispose();
   });
 });
+
+describe("direct native terminal restoration", () => {
+  it("restores View by the verified Claude PID and removes it when that process exits", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(NOW);
+    const nativeTerminal = { processId: Promise.resolve(300), show: vi.fn() };
+    Object.assign(vscode.window, { terminals: [nativeTerminal] });
+    fsReadMock.mockReturnValue(JSON.stringify([entry()]));
+    startTimes.mockResolvedValue(new Map([[100, NOW - 20_000], [300, NOW - 10_000]]));
+    const registry = createTerminalRegistry(); const watcher = startActiveSessionWatcher(registry);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(registry.has("session")).toBe(true);
+      expect(registry.view("session")).toBe(true);
+      expect(nativeTerminal.show).toHaveBeenCalledExactlyOnceWith(false);
+      alive.delete(300);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(registry.has("session")).toBe(false);
+    } finally { watcher.dispose(); registry.dispose(); }
+  });
+
+  it("does not restore a native terminal whose Claude PID was recycled", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(NOW);
+    const nativeTerminal = { processId: Promise.resolve(300), show: vi.fn() };
+    Object.assign(vscode.window, { terminals: [nativeTerminal] });
+    fsReadMock.mockReturnValue(JSON.stringify([entry()]));
+    startTimes.mockResolvedValue(new Map([[300, NOW - 1000]]));
+    const registry = createTerminalRegistry(); const watcher = startActiveSessionWatcher(registry);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(registry.has("session")).toBe(false);
+      expect(registry.view("session")).toBe(false);
+      expect(nativeTerminal.show).not.toHaveBeenCalled();
+    } finally { watcher.dispose(); registry.dispose(); }
+  });
+});

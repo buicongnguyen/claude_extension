@@ -28,6 +28,7 @@ import { fmtDuration, fmtTime } from "../../../../../webview/utils";
 import {
   sendConfirmDelete,
   sendContinueTask,
+  sendWaitAndContinueSession,
   sendCopyCommand,
   sendCreateWorktree,
   sendExportSession,
@@ -241,6 +242,13 @@ function Actions({
         onClick={() => sendContinueTask(d.id)}
       >
         Continue task
+      </Button>
+      <Button
+        iconName="clock"
+        title="Resume in a new terminal and automatically continue after the usage limit resets"
+        onClick={() => sendWaitAndContinueSession(d.id)}
+      >
+        Wait and auto-continue
       </Button>
       {hasOpenTerminal ? (
         <Button
