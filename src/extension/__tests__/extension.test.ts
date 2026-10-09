@@ -5,6 +5,11 @@ import { _fireConfigChange, _resetListeners, _setVersion } from "../../__mocks__
 import { ClaudeSessionViewProvider } from "../../features/sessions/viewProvider";
 import { activate } from "../extension";
 
+vi.mock("../../features/account/accountAudit", () => ({
+  initializeAccountAudit: vi.fn(), closeAccountAudit: vi.fn(), auditAccountEvent: vi.fn(),
+  safeAccountErrorCode: () => "unknown", withAccountAudit: (_action: string, work: () => unknown) => work(),
+  readAccountAuditLog: () => "",
+}));
 vi.mock("../../features/account/profileVault", () => ({ initializeProfileVault: async () => {}, closeProfileVault: () => {} }));
 vi.mock("../../features/account/liveSwitch", () => ({ recoverPendingSwitch: () => ({ ok: true }) }));
 
@@ -97,6 +102,7 @@ describe("activate", () => {
       "claudeManager.open",
       expect.any(Function),
     );
+    expect(registerCommandSpy).toHaveBeenCalledWith("claudeManager.showAccountSwitchLog", expect.any(Function));
     expect(createStatusBarSpy).toHaveBeenCalled();
   });
 });

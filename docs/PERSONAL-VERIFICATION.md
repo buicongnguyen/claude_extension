@@ -1,5 +1,14 @@
 # Personal fork verification
 
+## Version 2.15.9 — saved account switch logs
+
+Switch attempts and startup recovery now retain local diagnostics across reloads. Logs use a fixed vocabulary without account or credential details; the viewer opens a revalidated snapshot. File rotation targets eight 256 KiB files, and logging failure does not interrupt credential operations. Explicit cancellations, save failures, verified backend commit/restore and subsequent reload errors remain distinguishable. Target metadata is read before a live commit. See [feature details](ACCOUNT-LOGS-2.15.9.md).
+
+- Full suite: **4,118 passed / 19 failed** (4,137 tests, 306 files). All 19 failure identities exactly match the 2.15.8 Windows baseline; no new failures and no missing baseline failures. See [validation](VALIDATION-2.15.9.json).
+- Sixty-one added regressions cover logger privacy, persistence, rotation, separate hosts, async correlation, IO failures, backend transaction/recovery stages, detached picker errors, identity cancellation, save failure callbacks and the log viewer.
+- TypeScript, configured Biome and extension/webview/CSS builds pass. Independent review found no remaining blocker in the logging change.
+- Synthetic fixtures only: no real account switch, SecretStorage read or Claude request was used for validation. Open Claude clients still need restarting to adopt a changed login. Past unlogged attempts cannot be recovered.
+
 ## Version 2.15.8 — wait and auto-continue
 
 The conversation detail action now hands the same saved session to an interactive native CLI with invocation-only automatic waiting enabled. It requires a trusted open project, supported CLI version and explicit confirmation. Native argv avoids shell quoting, default permissions remain active, duplicate clicks focus the existing terminal, and terminal persistence is disabled to prevent prompt replay after reload. See [feature details](AUTO-CONTINUE-2.15.8.md).

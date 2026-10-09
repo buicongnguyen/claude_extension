@@ -4,11 +4,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // only the getAccountData dispatch + model-revalidation re-push, not real disk
 // or CLI I/O. vi.hoisted runs before the hoisted vi.mock factories so the
 // spies exist by the time the factories close over them.
-const { revalidateModelCache, parseAccountData, postAccountData, saveProfile } = vi.hoisted(() => ({
+const { revalidateModelCache, parseAccountData, postAccountData, saveProfile, updateSavedProfile } = vi.hoisted(() => ({
   revalidateModelCache: vi.fn<[], Promise<boolean>>(),
   parseAccountData: vi.fn((_ws?: string) => ({ marker: "account" }) as unknown),
   postAccountData: vi.fn(),
   saveProfile: vi.fn(),
+  updateSavedProfile: vi.fn(),
 }));
 let workspace: string | undefined = "/ws";
 
@@ -30,6 +31,8 @@ vi.mock("../../account/profiles", () => ({
   updateProfile: vi.fn(),
   listProfiles: () => [],
 }));
+
+vi.mock("../profileActions", () => ({ updateProfileWithConfirmation: updateSavedProfile }));
 
 import * as vscode from "vscode";
 import * as fs from "fs";
@@ -179,5 +182,78 @@ describe("native save without a webview", () => {
     const error = vi.spyOn(vscode.window, "showErrorMessage").mockResolvedValue(undefined);
     expect(await promptToSaveProfile(noPanel())).toBe(false);
     expect(error).toHaveBeenCalled();
+  });
+});
+
+
+describe("native save failure diagnostics", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks(); vi.clearAllMocks();
+    parseAccountData.mockReturnValue({ profile: { email: "synthetic@example.test" } });
+    saveProfile.mockReturnValue({ ok: true, data: { slug: "synthetic-slot", label: "Synthetic" } });
+    updateSavedProfile.mockReset().mockResolvedValue({ ok: true, data: { label: "Synthetic" } });
+    vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("Synthetic");
+  });
+  function context(acknowledged = true) {
+    return { getWebview: () => undefined, globalState: { get: () => acknowledged, update: vi.fn() } } as unknown as HostContext;
+  }
+
+  it("reports only the bounded save error code, without the detailed result", async () => {
+    saveProfile.mockReturnValue({ ok: false, error: "copy-failed", detail: "private synthetic-token and synthetic@example.test" });
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(false);
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith("copy-failed");
+    expect(JSON.stringify(onFailure.mock.calls)).not.toContain("synthetic-token");
+    expect(JSON.stringify(onFailure.mock.calls)).not.toContain("synthetic@example.test");
+  });
+
+  it("does not report a failure after a successful save", async () => {
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(true);
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not classify a cancelled label prompt as a backend failure", async () => {
+    vi.spyOn(vscode.window, "showInputBox").mockResolvedValue(undefined);
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(false);
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not classify a declined storage disclaimer as a backend failure", async () => {
+    vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(false), onFailure)).toBe(false);
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("reports a real update failure after the user accepts the existing-profile update", async () => {
+    saveProfile.mockReturnValue({ ok: false, error: "already-saved", detail: "synthetic-slot" });
+    vi.spyOn(vscode.window, "showInformationMessage").mockResolvedValue("Update existing" as never);
+    updateSavedProfile.mockResolvedValue({ ok: false, error: "unreadable-source", detail: "private synthetic-token" });
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(false);
+    expect(updateSavedProfile).toHaveBeenCalledExactlyOnceWith("synthetic-slot");
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith("unreadable-source");
+  });
+
+  it("does not treat declining an existing-profile update as a save failure", async () => {
+    saveProfile.mockReturnValue({ ok: false, error: "already-saved", detail: "synthetic-slot" });
+    vi.spyOn(vscode.window, "showInformationMessage").mockResolvedValue(undefined);
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(false);
+    expect(updateSavedProfile).not.toHaveBeenCalled();
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not classify cancelled identity confirmation during update as a backend failure", async () => {
+    saveProfile.mockReturnValue({ ok: false, error: "already-saved", detail: "synthetic-slot" });
+    vi.spyOn(vscode.window, "showInformationMessage").mockResolvedValue("Update existing" as never);
+    updateSavedProfile.mockResolvedValue({ ok: false, error: "identity-unverified", cancelled: true });
+    const onFailure = vi.fn();
+    expect(await promptToSaveProfile(context(), onFailure)).toBe(false);
+    expect(onFailure).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,7 @@ import { rememberActiveQuota } from "../account/quotaHistory";
 import { revalidateModelCache } from "../account/models";
 import { installStatusline, uninstallStatusline } from "../account/statuslineInstall";
 import {
+  type ProfileError,
   saveProfile as saveProfileSnapshot,
   listProfiles as listProfilesSnapshot,
 } from "../account/profiles";
@@ -185,7 +186,7 @@ export async function handleAccountMessage(
 }
 
 /** Native save flow also works before the Manager panel has been opened. */
-export async function promptToSaveProfile(ctx: Pick<HostContext, "getWebview" | "globalState">): Promise<boolean> {
+export async function promptToSaveProfile(ctx: Pick<HostContext, "getWebview" | "globalState">, onFailure?: (code: ProfileError) => void): Promise<boolean> {
   // Native VS Code input box replaces the old inline save form.
   // Default label sourced from the live account so most users
   // can just press Enter. We pre-parse account data once to seed
@@ -255,6 +256,7 @@ export async function promptToSaveProfile(ctx: Pick<HostContext, "getWebview" | 
         const upd = await updateProfileSnapshot(existingSlug);
         saved = upd.ok;
         if (!upd.ok) {
+          if (!upd.cancelled) onFailure?.(upd.error);
           vscode.window.showErrorMessage(
             `Couldn't update profile: ${upd.detail ?? upd.error}.`,
           );
@@ -265,6 +267,7 @@ export async function promptToSaveProfile(ctx: Pick<HostContext, "getWebview" | 
         }
       }
     } else {
+      onFailure?.(result.error);
       vscode.window.showErrorMessage(
         `Couldn't save profile: ${result.detail ?? result.error}.`,
       );

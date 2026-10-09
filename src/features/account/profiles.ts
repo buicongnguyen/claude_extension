@@ -43,6 +43,7 @@ import { getProfileDirectory } from "./profileVault";
 import { readAccountSnapshot, writeAccountSnapshot, SNAPSHOT_FILE, type AccountSnapshot } from "./accountSnapshot";
 import { hasPendingSwitch, recoverPendingSwitchUnlocked, writeLiveAccount } from "./liveSwitch";
 import { readClaudeJsonRaw } from "./claudeJsonCache";
+import { auditAccountEvent, safeAccountErrorCode } from "./accountAudit";
 import { withLocks, CREDENTIAL_LOCKS, CONFIG_LOCK, describeLockFailure } from "./claudeLocks";
 import {
   readCredentials,
@@ -668,7 +669,8 @@ function updateProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
     return { ok: true, data: { slug, label: saved.label, savedAt: meta.savedAt ?? "", ...identity,
       organizationName: meta.organizationName ?? "", subscriptionType: meta.subscriptionType ?? "", tokenExpiresAt: meta.tokenExpiresAt ?? 0,
       credentialsHash: hashCredentials(pair.credsRaw) } };
-  } catch {
+  } catch (error) {
+    auditAccountEvent("snapshot_failed", { stage: "outgoing_snapshot", code: safeAccountErrorCode(error), reason: "backend_failed" });
     return { ok: false, error: "copy-failed", detail: "The account snapshot could not be updated. Its previous committed snapshot was kept." };
   }
 }
@@ -708,33 +710,43 @@ export function syncActiveProfile(): string | null {
  */
 export function switchProfile(slug: string, approval?: ProfileUpdateApproval): ProfileResult<SavedProfile> {
   // Personal fork: serialize swaps with Claude's refresh/config writers.
-  return withProfileLocks(() => switchProfileUnlocked(slug, approval));
+  return withProfileLocks(() => switchProfileUnlocked(slug, approval), true);
 }
-function withProfileLocks<T>(work: () => ProfileResult<T>): ProfileResult<T> {
+function withProfileLocks<T>(work: () => ProfileResult<T>, auditSwitch = false): ProfileResult<T> {
   const result = withLocks([...CREDENTIAL_LOCKS, CONFIG_LOCK], () => {
     try { return work(); }
     catch (error) {
       if (error instanceof UnreadableCredentialsError) {
+        if (auditSwitch) auditAccountEvent("switch_preflight_failed", { stage: "preflight", code: "unreadable-source", reason: "transient_store" });
         return { ok: false, error: "unreadable-source", detail: error.message } as ProfileResult<T>;
       }
       throw error;
     }
   });
+  if (!result.ok && auditSwitch) auditAccountEvent("locks_failed", { stage: "locks", code: "copy-failed", reason: result.failure.reason });
   return result.ok ? result.value : { ok: false, error: "copy-failed", detail: describeLockFailure(result.failure) };
 }
 
 function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): ProfileResult<SavedProfile> {
+  auditAccountEvent("switch_preflight_started", { stage: "preflight" });
   const recovery = recoverPendingSwitchUnlocked();
-  if (!recovery.ok) return recovery;
+  if (!recovery.ok) {
+    auditAccountEvent("switch_preflight_failed", { stage: "preflight", code: recovery.error, reason: "required" });
+    return recovery;
+  }
   if (approval) {
     const current = captureProfileUpdateUnlocked(approval.slug);
-    if (!current.ok || !sameApproval(approval, current.data)) return { ok: false, error: "stale-confirmation", detail: "The account changed while confirmation was open. Reopen the account picker." };
+    if (!current.ok || !sameApproval(approval, current.data)) {
+      auditAccountEvent("switch_preflight_failed", { stage: "approval", code: "stale-confirmation", reason: "identity_changed" });
+      return { ok: false, error: "stale-confirmation", detail: "The account changed while confirmation was open. Reopen the account picker." };
+    }
   }
   const slotDir = slotDirectory(slug);
   const slotClaudeJson = path.join(slotDir, ".claude.json");
   const slotCreds = path.join(slotDir, ".credentials.json");
 
   if (!fs.existsSync(path.join(slotDir, SNAPSHOT_FILE)) && (!fs.existsSync(slotClaudeJson) || !fs.existsSync(slotCreds))) {
+    auditAccountEvent("switch_preflight_failed", { stage: "target_presence", code: "slot-missing", reason: "missing_target" });
     return { ok: false, error: "slot-missing", detail: slug };
   }
 
@@ -748,25 +760,42 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
   try {
     const activeSlug = liveCredentials ? activeProfileForCredentials(liveCredentials) : null;
     if (liveCredentials && !activeSlug) {
+      auditAccountEvent("switch_preflight_failed", { stage: "outgoing_snapshot", code: "unsaved-active-account", reason: "unsaved" });
       return {
         ok: false,
         error: "unsaved-active-account",
         detail: "Save the current account as a profile before switching so you can return to it. No account switch was made.",
       };
     }
-    if (activeSlug === slug) return updateProfileUnlocked(slug, approval);
     if (activeSlug) {
+      auditAccountEvent("save_current_started", { stage: "outgoing_snapshot" });
       const saved = updateProfileUnlocked(activeSlug, approval);
-      if (!saved.ok) return saved;
+      auditAccountEvent(saved.ok ? "save_current_completed" : "save_current_failed", saved.ok
+        ? { stage: "outgoing_snapshot", reason: "saved" }
+        : { stage: "outgoing_snapshot", code: saved.error });
+      if (!saved.ok) {
+        auditAccountEvent("switch_preflight_failed", { stage: "outgoing_snapshot", code: saved.error });
+        return saved;
+      }
+      if (activeSlug === slug) {
+        auditAccountEvent("switch_preflight_completed", { stage: "preflight", reason: "already_active" });
+        return saved;
+      }
     }
-  } catch {
+  } catch (error) {
+    auditAccountEvent("save_current_failed", { stage: "outgoing_snapshot", code: safeAccountErrorCode(error) });
+    auditAccountEvent("switch_preflight_failed", { stage: "outgoing_snapshot", code: "copy-failed" });
     return { ok: false, error: "copy-failed", detail: "The current account could not be saved. No account switch was made." };
   }
+  auditAccountEvent("switch_preflight_completed", { stage: "preflight" });
 
   let mergedClaudeJson: string;
   let credsRaw: string;
+  let targetMeta: Partial<SavedProfile>;
+  auditAccountEvent("target_read_started", { stage: "target_snapshot" });
   try {
     const snapshot = readAccountSnapshot(slotDir);
+    targetMeta = snapshotMeta(snapshot);
     const snapClaudeRaw = snapshot.claudeJsonRaw;
     credsRaw = snapshot.credsRaw;
     const snap = JSON.parse(snapClaudeRaw) as Record<string, unknown>;
@@ -815,6 +844,7 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
     }
     mergedClaudeJson = JSON.stringify(merged, null, 2);
   } catch (err) {
+    auditAccountEvent("target_read_failed", { stage: "target_snapshot", code: safeAccountErrorCode(err), reason: "unreadable" });
     return {
       ok: false,
       error: "unreadable-source",
@@ -822,10 +852,12 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
     };
   }
 
+  auditAccountEvent("target_read_completed", { stage: "target_snapshot" });
   const written = writeLiveAccount(mergedClaudeJson, credsRaw);
   if (!written.ok) return written;
 
-  const meta = readSnapshotMeta(slotDir);
+  // Reuse the verified target snapshot; no throwing read after the live commit.
+  const meta = targetMeta;
   return {
     ok: true,
     data: {

@@ -7,6 +7,7 @@
  * provider so the ~250-line QuickPick wiring doesn't bloat the coordinator.
  */
 import * as vscode from "vscode";
+import { auditAccountEvent, safeAccountErrorCode, withAccountAudit, type AccountAuditStage, type AccountAuditCode } from "../account/accountAudit";
 import type { PanelSink } from "../../extension/panelSink";
 import { postAccountData } from "./accountPush";
 import { promptToSaveProfile } from "./accountHandlers";
@@ -243,52 +244,115 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
 
   picker.onDidAccept(async () => {
     const pick = picker.selectedItems[0];
+    if (!pick) { picker.hide(); picker.dispose(); return; }
+    if (pick.action === "switch" && pick.slug) {
+      const slug = pick.slug;
+      // VS Code does not await QuickPick event callbacks. Keep the audit context
+      // and every rejection handler inside this detached action.
+      await withAccountAudit("switch", async () => {
+        let stage: AccountAuditStage = "confirmation";
+        let localOperationSucceeded = false;
+        let outcomeRecorded = false;
+        try {
+          picker.hide();
+          picker.dispose();
+          const targetProfile = savedProfiles.find((p) => p.slug === slug);
+          auditAccountEvent("confirmation_requested", { stage });
+          const confirm = await vscode.window.showWarningMessage(
+            "Switch Claude account?",
+            { modal: true, detail: buildSwitchConfirmDetail(targetProfile) },
+            "Switch",
+          );
+          if (confirm !== "Switch") {
+            auditAccountEvent("operation_cancelled", { stage, reason: "user_cancelled" });
+            return;
+          }
+          auditAccountEvent("confirmation_accepted", { stage });
+          stage = "switch";
+          let result = await switchProfileSnapshot(slug);
+          if (!result.ok && result.error === "unsaved-active-account") {
+            stage = "save_current";
+            auditAccountEvent("confirmation_requested", { stage });
+            const choice = await vscode.window.showWarningMessage(
+              "Save the current account before switching?",
+              { modal: true, detail: "This login has no saved profile. Save it first so you can switch back later. Cancelling leaves your current login in place." },
+              "Save and switch",
+            );
+            if (choice !== "Save and switch") {
+              auditAccountEvent("operation_cancelled", { stage, reason: "user_cancelled" });
+              return;
+            }
+            auditAccountEvent("confirmation_accepted", { stage });
+            auditAccountEvent("save_current_started", { stage });
+            let saveFailure: AccountAuditCode | undefined;
+            if (!await promptToSaveProfile(ctx, (code) => { saveFailure = safeAccountErrorCode(code); })) {
+              if (saveFailure) {
+                auditAccountEvent("save_current_failed", { stage, code: saveFailure });
+                auditAccountEvent("operation_failed", { stage, code: saveFailure, reason: "save_not_completed" });
+              } else {
+                auditAccountEvent("operation_cancelled", { stage, reason: "save_not_completed" });
+              }
+              return;
+            }
+            auditAccountEvent("save_current_completed", { stage });
+            // Retry the backend guard: another window may have changed the login.
+            stage = "switch";
+            result = await switchProfileSnapshot(slug);
+          }
+          if (!result.ok) {
+            auditAccountEvent(result.cancelled ? "operation_cancelled" : "operation_failed", {
+              stage, code: safeAccountErrorCode(result.error),
+              ...(result.cancelled ? { reason: "user_cancelled" as const } : {}),
+            });
+            outcomeRecorded = true;
+            if (!result.cancelled) {
+              stage = "notification";
+              const action = await vscode.window.showErrorMessage(
+                "Switch failed: " + (result.detail ?? result.error) + ".", "Open switch log",
+              );
+              if (action === "Open switch log") {
+                await vscode.commands.executeCommand("claudeManager.showAccountSwitchLog");
+              }
+            }
+          } else {
+            // Record local success before any UI await/reload. The backend records whether a live swap or same-account snapshot update occurred.
+            // This is not a claim that Claude accepted the token remotely.
+            localOperationSucceeded = true;
+            outcomeRecorded = true;
+            auditAccountEvent("operation_completed", { stage, reason: "local_operation_succeeded" });
+            stage = "notification";
+            const reload = await vscode.window.showInformationMessage(
+              "Switched to " + (result.data.email || result.data.label) + ". " +
+                "Restart Claude terminals and reload VS Code, then verify the account in Claude's /status.",
+              "Reload window",
+            );
+            stage = "reload";
+            if (reload === "Reload window") {
+              auditAccountEvent("reload_requested", { stage, reason: "restart_required" });
+              await vscode.commands.executeCommand("workbench.action.reloadWindow");
+            } else {
+              auditAccountEvent("reload_deferred", { stage, reason: "restart_required" });
+            }
+          }
+          stage = "refresh_ui";
+          pushAccountUpdate();
+        } catch (error) {
+          auditAccountEvent(outcomeRecorded ? (stage === "reload" ? "reload_failed" : "ui_failed") : "operation_failed", {
+            stage, code: safeAccountErrorCode(error), reason: "unexpected_exception",
+          });
+          // Notification failure must not escape this detached callback either.
+          try {
+            await vscode.window.showErrorMessage(localOperationSucceeded
+              ? "The local account operation succeeded, but refreshing VS Code failed. Restart Claude terminals and reload VS Code. See Claude Code Manager: Show Account Switch Log."
+              : "The account action encountered an error. See Claude Code Manager: Show Account Switch Log for the saved steps.");
+          } catch { /* The host may be shutting down; the audit was already saved. */ }
+        }
+      });
+      return;
+    }
     picker.hide();
     picker.dispose();
-    if (!pick) return;
-    if (pick.action === "switch" && pick.slug) {
-      const targetProfile = savedProfiles.find((p) => p.slug === pick.slug);
-      const confirm = await vscode.window.showWarningMessage(
-        "Switch Claude account?",
-        { modal: true, detail: buildSwitchConfirmDetail(targetProfile) },
-        "Switch",
-      );
-      if (confirm !== "Switch") return;
-      let result = await switchProfileSnapshot(pick.slug);
-      if (!result.ok && result.error === "unsaved-active-account") {
-        const choice = await vscode.window.showWarningMessage(
-          "Save the current account before switching?",
-          { modal: true, detail: "This login has no saved profile. Save it first so you can switch back later. Cancelling leaves your current login in place." },
-          "Save and switch",
-        );
-        if (choice !== "Save and switch") return;
-        if (!await promptToSaveProfile(ctx)) return;
-        // Retry through the backend guard: cancelling/failed save or a new login
-        // in another window must not replace an unsaved account.
-        result = await switchProfileSnapshot(pick.slug);
-      }
-      if (!result.ok) {
-        vscode.window.showErrorMessage(
-          `Switch failed: ${result.detail ?? result.error}.`,
-        );
-      } else {
-        // Set the honest expectation: the credentials are swapped
-        // immediately (new sessions pick them up at once), but a Claude
-        // session already running holds its token in memory and only
-        // re-reads on its own schedule — so the switch isn't instant in
-        // an open terminal. Without saying so, users read the terminal
-        // still on the old account as a bug.
-        const reload = await vscode.window.showInformationMessage(
-          `Switched to ${result.data.email || result.data.label}. ` +
-            `Restart Claude terminals and reload VS Code, then verify the account in Claude's /status.`,
-          "Reload window",
-        );
-        if (reload === "Reload window") {
-          await vscode.commands.executeCommand("workbench.action.reloadWindow");
-        }
-      }
-      pushAccountUpdate();
-    } else if (pick.action === "unreadable") {
+    if (pick.action === "unreadable") {
       void vscode.window.showErrorMessage(pick.detail || "Saved account could not be read. Its stored files were left untouched.");
     } else if (pick.action === "save") {
       await promptToSaveProfile(ctx);

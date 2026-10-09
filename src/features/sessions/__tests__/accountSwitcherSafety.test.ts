@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   current: {} as any, picker: undefined as any, accept: undefined as (() => Promise<void>) | undefined,
   update: vi.fn(), switch: vi.fn(), saveNew: vi.fn(), warning: vi.fn(), launch: vi.fn(), error: vi.fn(), events: [] as string[],
+  audit: [] as Array<{ event: string; fields?: any }>, info: vi.fn(), command: vi.fn(), push: vi.fn(),
 }));
 vi.mock("vscode", () => ({
   ThemeIcon: class { constructor(public id: string) {} },
@@ -13,17 +14,23 @@ vi.mock("vscode", () => ({
       onDidTriggerItemButton: vi.fn(), onDidHide: vi.fn(),
       onDidAccept: (handler: () => Promise<void>) => { state.accept = handler; },
     }),
-    showErrorMessage: state.error, showInformationMessage: vi.fn(), showWarningMessage: state.warning,
+    showErrorMessage: state.error, showInformationMessage: state.info, showWarningMessage: state.warning,
   },
-  commands: { executeCommand: vi.fn() },
+  commands: { executeCommand: state.command },
 }));
 vi.mock("../../account/parser", () => ({ parseAccountData: () => state.current }));
 vi.mock("../../account/profiles", () => ({ removeProfile: vi.fn() }));
 vi.mock("../profileActions", () => ({ updateProfileWithConfirmation: state.update, switchProfileWithConfirmation: state.switch }));
 vi.mock("../accountHandlers", () => ({ promptToSaveProfile: state.saveNew }));
-vi.mock("../accountPush", () => ({ postAccountData: vi.fn() }));
+vi.mock("../accountPush", () => ({ postAccountData: state.push }));
 vi.mock("../../../extension/workspace", () => ({ getWorkspace: () => undefined }));
 vi.mock("../../../extension/terminal", () => ({ createTerminal: vi.fn(), launchClaudeWithInput: state.launch }));
+
+vi.mock("../../account/accountAudit", () => ({
+  withAccountAudit: (_action: string, work: () => unknown) => { state.audit.push({ event: "operation_started" }); return work(); },
+  auditAccountEvent: (event: string, fields?: any) => { state.audit.push({ event, fields }); },
+  safeAccountErrorCode: (error: any) => typeof error === "string" ? error : error?.code === "EACCES" ? "EACCES" : "unknown",
+}));
 
 import { openAccountSwitcher } from "../accountSwitcher";
 
@@ -36,7 +43,8 @@ async function chooseLogin() {
   await state.accept!();
 }
 beforeEach(() => {
-  vi.clearAllMocks(); state.current = current("alice"); state.events = [];
+  vi.clearAllMocks(); state.current = current("alice"); state.events = []; state.audit = [];
+  state.error.mockReset(); state.info.mockReset(); state.command.mockReset(); state.push.mockReset();
   state.update.mockImplementation(async () => { state.events.push("save"); return { ok: true, data: {} }; });
   state.launch.mockImplementation(() => { state.events.push("login"); });
   state.switch.mockResolvedValue({ ok: true, data: { label: "alice" } });
@@ -128,5 +136,84 @@ describe("saved account preservation from the picker", () => {
     expect(state.error).toHaveBeenCalledWith("The saved account remains stored but cannot be read.");
     expect(state.switch).not.toHaveBeenCalled();
     expect(state.update).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("saved switch diagnostics", () => {
+  const ctx = { getWebview: () => undefined, dispatch: vi.fn() };
+  it("records cancellation without starting a switch", async () => {
+    await openAccountSwitcher(ctx);
+    await choose("switch", "alice");
+    expect(state.switch).not.toHaveBeenCalled();
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_cancelled", fields: { stage: "confirmation", reason: "user_cancelled" } });
+  });
+  it("records verified local completion before the reload prompt resolves", async () => {
+    state.warning.mockResolvedValue("Switch");
+    let finish!: (choice: string | undefined) => void;
+    state.info.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    await openAccountSwitcher(ctx);
+    state.picker.selectedItems = [state.picker.items.find((item: any) => item.slug === "alice")];
+    const pending = state.accept!();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_completed", fields: { reason: "local_operation_succeeded" } });
+    finish("Reload window");
+    state.command.mockImplementation(async () => {
+      expect(state.audit.at(-1)).toMatchObject({ event: "reload_requested" });
+    });
+    await pending;
+    expect(state.command).toHaveBeenCalledWith("workbench.action.reloadWindow");
+  });
+  it("keeps committed success when reload fails", async () => {
+    state.warning.mockResolvedValue("Switch"); state.info.mockResolvedValue("Reload window");
+    state.command.mockRejectedValue(Object.assign(new Error("private path/token"), { code: "EACCES" }));
+    await openAccountSwitcher(ctx); await choose("switch", "alice");
+    expect(state.audit).toContainEqual(expect.objectContaining({ event: "operation_completed" }));
+    expect(state.audit.at(-1)).toMatchObject({ event: "reload_failed", fields: { code: "EACCES" } });
+    expect(state.audit.some((e) => e.event === "operation_failed")).toBe(false);
+    expect(JSON.stringify(state.audit)).not.toMatch(/private|alice|example/);
+  });
+  it("contains unexpected rejections when VS Code fires a void event", async () => {
+    state.warning.mockResolvedValue("Switch");
+    state.switch.mockRejectedValue(new Error("secret account data"));
+    state.error.mockRejectedValue(new Error("notification host closing"));
+    await openAccountSwitcher(ctx);
+    state.picker.selectedItems = [state.picker.items.find((item: any) => item.slug === "alice")];
+    // VS Code ignores this promise; vitest would fail an unhandled rejection.
+    void state.accept!();
+    await vi.waitFor(() => expect(state.error).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_failed", fields: { stage: "switch", code: "unknown" } });
+    expect(JSON.stringify(state.audit)).not.toContain("secret");
+  });
+  it("records refresh failure separately after a completed switch", async () => {
+    state.warning.mockResolvedValue("Switch"); state.push.mockImplementation(() => { throw new Error("private"); });
+    await openAccountSwitcher({ ...ctx, getWebview: () => ({} as any) });
+    await choose("switch", "alice");
+    expect(state.audit.at(-1)).toMatchObject({ event: "ui_failed", fields: { stage: "refresh_ui" } });
+    expect(state.audit.filter((e) => e.event === "operation_completed")).toHaveLength(1);
+    expect(state.audit.some((e) => e.event === "operation_failed")).toBe(false);
+  });
+  it("records a refused switch code without its account details", async () => {
+    state.warning.mockResolvedValue("Switch");
+    state.switch.mockResolvedValue({ ok: false, error: "recovery-required", detail: "private@example.test" });
+    await openAccountSwitcher(ctx); await choose("switch", "alice");
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_failed", fields: { code: "recovery-required" } });
+    expect(JSON.stringify(state.audit)).not.toContain("private@example.test");
+  });
+  it("distinguishes a save-first failure from cancellation", async () => {
+    state.warning.mockResolvedValueOnce("Switch").mockResolvedValueOnce("Save and switch");
+    state.switch.mockResolvedValue({ ok: false, error: "unsaved-active-account" });
+    state.saveNew.mockImplementation(async (_ctx: unknown, onFailure: (code: string) => void) => { onFailure("copy-failed"); return false; });
+    await openAccountSwitcher(ctx); await choose("switch", "alice");
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_failed", fields: { stage: "save_current", code: "copy-failed" } });
+    expect(state.audit.some((e) => e.event === "operation_cancelled")).toBe(false);
+  });
+  it("treats explicit identity-confirmation cancellation as cancellation", async () => {
+    state.warning.mockResolvedValue("Switch");
+    state.switch.mockResolvedValue({ ok: false, error: "identity-unverified", cancelled: true });
+    await openAccountSwitcher(ctx); await choose("switch", "alice");
+    expect(state.audit.at(-1)).toMatchObject({ event: "operation_cancelled", fields: { code: "identity-unverified" } });
+    expect(state.error).not.toHaveBeenCalled();
   });
 });

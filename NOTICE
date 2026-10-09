@@ -20,4 +20,6 @@ exclusive atomic temporary files and process-ancestry terminal matching.
 Additional October 2026 fixes: unsaved-account preservation, visible unreadable
 profile diagnostics, native saving without a webview, identity conflict checks,
 and standalone CLI PATH support for Manager terminals.
+Additional October 2026 features: per-conversation usage-limit waiting and
+privacy-filtered persistent account switch logs with bounded retention and a log viewer.
 This is not an upstream release or an official Anthropic product.

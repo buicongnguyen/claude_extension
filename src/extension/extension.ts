@@ -41,6 +41,8 @@ import { importBrain, previewConflicts, readManifest } from "../features/brain/i
 import { reportIssueCommand, runDiagnosticsCommand } from "../features/diagnostics/commands";
 import { initializeProfileVault, closeProfileVault } from "../features/account/profileVault";
 import { recoverPendingSwitch } from "../features/account/liveSwitch";
+import { initializeAccountAudit, closeAccountAudit, withAccountAudit, auditAccountEvent, safeAccountErrorCode } from "../features/account/accountAudit";
+import { showAccountSwitchLog } from "./accountSwitchLog";
 
 /**
  * Activate the Claude Manager extension.
@@ -71,15 +73,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showErrorMessage(message);
     throw new Error(message);
   }
-  // Personal fork: unlock encrypted profiles before any parsing or command registration.
-  try {
-    await initializeProfileVault(context.secrets, path.join(context.globalStorageUri.fsPath, "accounts"));
-    const recovery = recoverPendingSwitch();
-    if (!recovery.ok) void vscode.window.showErrorMessage(recovery.detail);
-  } catch (error) {
-    void vscode.window.showErrorMessage(`Claude Code Manager Personal: ${error instanceof Error ? error.message : "Account storage could not be unlocked."}`);
-    throw error;
-  }
+  initializeAccountAudit(path.join(context.globalStorageUri.fsPath, "logs"), context.extension?.packageJSON?.version ?? "unknown");
+  context.subscriptions.push({ dispose: closeAccountAudit });
+  context.subscriptions.push(vscode.commands.registerCommand("claudeManager.showAccountSwitchLog", showAccountSwitchLog));
+  // Initialize logging before storage so startup recovery errors are retained.
+  await withAccountAudit("recovery", async () => {
+    try {
+      await initializeProfileVault(context.secrets, path.join(context.globalStorageUri.fsPath, "accounts"));
+      const recovery = recoverPendingSwitch();
+      auditAccountEvent(recovery.ok ? "operation_completed" : "operation_failed", {
+        stage: "activation", ...(recovery.ok ? {} : { code: safeAccountErrorCode(recovery.error) }),
+      });
+      if (!recovery.ok) void vscode.window.showErrorMessage(recovery.detail);
+    } catch (error) {
+      auditAccountEvent("operation_failed", { stage: "activation", code: safeAccountErrorCode(error), reason: "unexpected_exception" });
+      void vscode.window.showErrorMessage(`Claude Code Manager Personal: ${error instanceof Error ? error.message : "Account storage could not be unlocked."}`);
+      throw error;
+    }
+  });
   context.subscriptions.push({ dispose: closeProfileVault });
   // Protect every terminal alive right now (restored running `claude`
   // sessions after a reload, pre-existing user terminals) from the
@@ -551,8 +562,8 @@ async function offerQuotaNudge(context: vscode.ExtensionContext): Promise<void> 
 }
 
 /**
- * Deactivate the extension. Currently a no-op.
+ * Release the in-memory audit destination when the host deactivates.
  */
 export function deactivate(): void {
-  // No cleanup needed
+  closeAccountAudit();
 }
