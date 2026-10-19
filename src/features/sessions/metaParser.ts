@@ -172,14 +172,17 @@ export function extractProjectName(projectPath: string): string {
  * (plus the accumulated results array).
  */
 export function parseJsonlFile<T>(filePath: string): T[] {
+  return [...iterateJsonlFile<T>(filePath)];
+}
+
+/** Streaming iterator: callers can aggregate without retaining the whole transcript. */
+export function* iterateJsonlFile<T>(filePath: string, onOversized?: () => void): Generator<T> {
   // Symlink-safe: a planted link under ~/.claude/projects/ must not
   // make us read (and display) a file outside the transcript tree.
   const fd = openFileNoFollow(filePath);
   if (fd === null) {
-    return [];
+    return;
   }
-
-  const results: T[] = [];
   const CHUNK = 64 * 1024;
   const buf = Buffer.alloc(CHUNK);
   // Decodes across chunk boundaries; see core/lineDecoder for why a plain
@@ -196,7 +199,7 @@ export function parseJsonlFile<T>(filePath: string): T[] {
       for (const line of decoder.push(buf, bytesRead)) {
         if (!line.trim()) continue;
         try {
-          results.push(JSON.parse(line) as T);
+          yield JSON.parse(line) as T;
         } catch {
           // Skip malformed lines — expected during partial writes
         }
@@ -207,16 +210,16 @@ export function parseJsonlFile<T>(filePath: string): T[] {
     const leftover = decoder.end();
     if (leftover.trim()) {
       try {
-        results.push(JSON.parse(leftover) as T);
+        yield JSON.parse(leftover) as T;
       } catch {
         // Skip
       }
     }
   } finally {
     fs.closeSync(fd);
+    if (decoder.skippedLines) onOversized?.();
   }
 
-  return results;
 }
 
 export interface SessionMeta {

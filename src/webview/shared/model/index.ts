@@ -11,6 +11,7 @@ export {
   setErrorSink,
 } from "./errorLog";
 export {
+  accountFocusedMode,
   activeTab,
   applyShellSettings,
   type Density,

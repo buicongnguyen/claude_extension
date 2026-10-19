@@ -58,12 +58,20 @@ const sessionTapOpts = {
   logLevel: "info",
 };
 
+const sessionWorkerOpts = {
+  ...opts,
+  entryPoints: ["src/features/sessions/sessionWorker.ts"],
+  outfile: "dist/session-worker.js",
+  sourcemap: false,
+};
+
 if (watch) {
   const ctx = await context(opts);
   const tapCtx = await context(tapOpts);
   const sessionCtx = await context(sessionTapOpts);
-  await Promise.all([ctx.watch(), tapCtx.watch(), sessionCtx.watch()]);
+  const workerCtx = await context(sessionWorkerOpts);
+  await Promise.all([ctx.watch(), tapCtx.watch(), sessionCtx.watch(), workerCtx.watch()]);
   console.log("build-extension: watching for changes…");
 } else {
-  await Promise.all([build(opts), build(tapOpts), build(sessionTapOpts)]);
+  await Promise.all([build(opts), build(tapOpts), build(sessionTapOpts), build(sessionWorkerOpts)]);
 }

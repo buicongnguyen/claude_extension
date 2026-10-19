@@ -2,7 +2,7 @@
   "name": "claude-manager-personal",
   "displayName": "Claude Code Manager Personal",
   "description": "Personal fork of Claude Code Manager: encrypted saved accounts and safer terminal input handling.",
-  "version": "2.15.9",
+  "version": "2.15.10",
   "publisher": "local-personal",
   "author": {
     "name": "Vishal Gupta",
@@ -315,6 +315,11 @@
             "Ask every time where to resume"
           ],
           "description": "Where Open conversation opens saved history. Play / Continue task submits a continuation in a terminal after confirmation. Within the Claude Code extension, chat opens in an editor tab or the Claude Code side bar according to that extension's own `claudeCode.preferredLocation` setting. Fork, Continue, and Restore Workspace always use the terminal since they have no equivalent in the extension chat."
+        },
+        "claudeManager.accountFocusedMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep account switching and local quota available while skipping history scans, search indexing, live-session polling, model-binary scans and transcript usage aggregation. Disable for full history features. Reload VS Code after changing this setting."
         }
       }
     }
@@ -343,7 +348,7 @@
     "test:integration": "node ./out/integration/runTest.js",
     "perf:fixtures": "node scripts/perf/generate-fixtures.mjs",
     "perf:measure": "node scripts/perf/measure.mjs",
-    "package:personal": "npm run build && npx --yes @vscode/vsce@3.6.2 package --no-dependencies --allow-missing-repository --no-rewrite-relative-links -o dist/claude-manager-personal-2.15.9.vsix"
+    "package:personal": "npm run build && npx --yes @vscode/vsce@3.6.2 package --no-dependencies --allow-missing-repository --no-rewrite-relative-links -o dist/claude-manager-personal-2.15.10.vsix"
   },
   "size-limit": [
     {

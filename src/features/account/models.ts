@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 /**
  * Dynamic model discovery from the locally installed Claude CLI.
  *
@@ -191,6 +192,7 @@ async function collectCliCandidates(): Promise<string[]> {
  * configured model — see `buildModelOptions` in account/webview/view.ts.
  */
 export function discoverModelsFromCli(): DiscoveredModel[] {
+  if (isAccountFocusedMode()) return cache ?? [];
   if (cache) return cache;
   // Non-blocking: never spawn on the caller's thread (parseAccountData runs
   // on the click path of ~19 settings handlers). Kick off the background
@@ -338,6 +340,7 @@ function finalizeModels(seen: Map<string, DiscoveredModel>): DiscoveredModel[] {
  * is never held in memory alongside the others.
  */
 export async function warmModelCache(): Promise<DiscoveredModel[]> {
+  if (isAccountFocusedMode()) return cache ?? [];
   if (cache) return cache;
   if (warming) return warming;
   warming = (async () => {

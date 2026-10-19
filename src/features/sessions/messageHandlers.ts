@@ -15,16 +15,13 @@
 import { recordError as recordHostError } from "../diagnostics/errorLog";
 import * as vscode from "vscode";
 import {
-  parseSessions,
-  parseSessionDetail,
   groupSessions,
   getStats,
   getUniqueProjects,
   searchSessions,
   filterSessions,
-  getLastParseWarning,
 } from "./parser";
-import { searchContent } from "./searchIndex";
+import { parseSessionsAsync, parseSessionDetailAsync, searchContentAsync as searchContent, getWorkerParseWarning as getLastParseWarning } from "./sessionWorkerClient";
 import { getSessionFile } from "./metaParser";
 import {
   loadState,
@@ -335,8 +332,8 @@ function makeAgentHost(ctx: HostContext): AgentHostContext {
  * outside the file-watcher's reliable reach — import and temp-session cleanup
  * / promotion — so the row set never depends on a watcher event landing.
  */
-function reparseAndPushSessions(ctx: HostContext): void {
-  ctx.setSessions(parseSessions(loadState().renames));
+async function reparseAndPushSessions(ctx: HostContext): Promise<void> {
+  ctx.setSessions(await parseSessionsAsync(loadState().renames));
   const wv = ctx.getWebview();
   if (!wv) return;
   ctx.postWorkspacePath();
@@ -369,7 +366,7 @@ async function handleSessionMessage(
     }
 
     case "ready": {
-      ctx.setSessions(parseSessions(loadState().renames));
+      ctx.setSessions(await parseSessionsAsync(loadState().renames));
       ctx.postWorkspacePath();
       ctx.refreshSettings();
       wv.postMessage({ type: "sessions", data: groupSessions(ctx.getSessions()), stats: getStats(ctx.getSessions()) });
@@ -389,7 +386,7 @@ async function handleSessionMessage(
     case "getSessionDetail": {
       const mode = (msg as { mode?: "first" | "last" }).mode ?? "last";
       const query = (msg as { query?: string }).query ?? "";
-      const detail = parseSessionDetail(
+      const detail = await parseSessionDetailAsync(
         msg.sessionId,
         ctx.getSessions().find((s) => s.id === msg.sessionId),
         mode,
@@ -421,7 +418,7 @@ async function handleSessionMessage(
     }
 
     case "refresh":
-      ctx.setSessions(parseSessions(loadState().renames));
+      ctx.setSessions(await parseSessionsAsync(loadState().renames));
       wv.postMessage({ type: "sessions", data: groupSessions(ctx.getSessions()), stats: getStats(ctx.getSessions()) });
       postWorktrees(wv, ctx.getSessions());
       ctx.buildSearchIndex();
@@ -579,7 +576,7 @@ async function handleSessionMessage(
         wv.postMessage({ type: "userState", ...state });
         // Refresh detail view if showing this session
         if (target) {
-          const updated = parseSessionDetail(msg.sessionId, target);
+          const updated = await parseSessionDetailAsync(msg.sessionId, target);
           if (updated) wv.postMessage({ type: "sessionDetail", data: updated });
         }
       }
@@ -678,7 +675,7 @@ async function handleSessionMessage(
     }
 
     case "copyMarkdown":
-      copyMarkdown(msg.sessionId, ctx.getSessions());
+      await copyMarkdown(msg.sessionId, ctx.getSessions());
       break;
 
     case "exportSession":

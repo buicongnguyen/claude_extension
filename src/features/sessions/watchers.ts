@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 /**
  * File-watcher dispatch for the sessions view provider.
  *
@@ -18,15 +19,13 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import {
-  parseSessions,
   groupSessions,
   getStats,
   getUniqueProjects,
-  getLastParseWarning,
-  reparseSessionsBatch,
   readLiveSessions,
   applyLiveState,
 } from "./parser";
+import { parseSessionsAsync, reparseSessionsBatchAsync, getWorkerParseWarning as getLastParseWarning } from "./sessionWorkerClient";
 import { loadState } from "./state";
 import { getTempSessionIds } from "../../extension/ephemeralSession";
 import { CLAUDE_MANAGER_DIR, STATUSLINE_CACHE_FILE } from "../../core/config";
@@ -264,6 +263,13 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
   bindAll(quotaWatcher, onQuotaCacheChange);
   watchers.push(quotaWatcher);
 
+  // Account-focused mode needs only login/settings/quota watchers.
+  if (isAccountFocusedMode()) return { dispose() {
+    if (accountReparseTimer) clearTimeout(accountReparseTimer);
+    if (quotaCacheTimer) clearTimeout(quotaCacheTimer);
+    for (const watcher of watchers) watcher.dispose();
+  } };
+
   // ── Session data watchers ──
   // history.jsonl is split out from the projects watcher so the
   // dispatch logic can pick the cheap path (single-session reparse)
@@ -290,10 +296,12 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
   );
 
   /** Full reparse path — the smart watcher falls back to this. */
-  const fullSessionsReparse = (): void => {
+  const fullSessionsReparse = async (): Promise<void> => {
     const wv = ctx.getWebview();
     if (!wv) return;
-    ctx.setSessions(parseSessions(loadState().renames));
+    const parsed = await parseSessionsAsync(loadState().renames);
+    if (!ctx.getWebview()) return;
+    ctx.setSessions(parsed);
     ctx.postWorkspacePath();
     wv.postMessage({
       type: "sessions",
@@ -307,7 +315,7 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
     ctx.buildSearchIndex();
   };
 
-  const runSessionsReparse = (): void => {
+  const runSessionsReparse = async (): Promise<void> => {
     sessionsReparseTimer = undefined;
     {
       const paths = Array.from(pendingSessionPaths);
@@ -324,7 +332,7 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
 
       try {
         if (historyChanged || transcriptPaths.length > TRANSCRIPT_FLOOD_THRESHOLD) {
-          fullSessionsReparse();
+          await fullSessionsReparse();
           return;
         }
         // Targeted path: only specific transcripts changed. Batch the
@@ -333,12 +341,14 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
         // sessions keep their cached meta — the whole point of the
         // smart watcher.
         const renames = loadState().renames;
-        const sessions = ctx.getSessions();
         const changedIds = transcriptPaths
           .map(sessionIdFromTranscriptPath)
           .filter((id): id is string => id !== null);
+        const batch = await reparseSessionsBatchAsync(changedIds, renames);
+        if (!ctx.getWebview()) return;
+        const sessions = ctx.getSessions();
         let mutated = false;
-        for (const [id, fresh] of reparseSessionsBatch(changedIds, renames)) {
+        for (const [id, fresh] of batch) {
           const idx = sessions.findIndex((s) => s.id === id);
           if (!fresh) {
             // Session was deleted — drop it from the cache.

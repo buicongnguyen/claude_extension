@@ -7,7 +7,8 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { execFile, execFileSync } from "child_process";
 import type { Session, SessionDetail } from "./types";
-import { parseSessionDetail, getSessionFile } from "./parser";
+import { getSessionFile } from "./parser";
+import { parseSessionDetailAsync } from "./sessionWorkerClient";
 import { deleteSession as deleteSessionState, loadState } from "./state";
 import { getCurrentBranch } from "../../extension/git";
 import { createTerminal, runInTerminal, validateGitRef } from "../../extension/terminal";
@@ -155,9 +156,9 @@ export function copyResumeCommand(sessionId: string): void {
  * Copy the full session transcript as Markdown to the clipboard.
  * Returns true if successful, false if the session or detail could not be found.
  */
-export function copyMarkdown(sessionId: string, sessions: Session[]): boolean {
+export async function copyMarkdown(sessionId: string, sessions: Session[]): Promise<boolean> {
   const sess = sessions.find((s) => s.id === sessionId);
-  const detail = parseSessionDetail(sessionId, sess);
+  const detail = await parseSessionDetailAsync(sessionId, sess);
   if (!detail) {
     return false;
   }

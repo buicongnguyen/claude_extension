@@ -296,7 +296,7 @@ describe("searchIndex — text beyond the per-session cap", () => {
    */
   function oversized(name: string, tail: unknown[]): string {
     return writeJsonl(name, [
-      { message: { role: "user", content: "x".repeat(MAX_CONTENT_CHARS + 1024) } },
+      ...Array.from({ length: 5 }, () => ({ message: { role: "user", content: "x".repeat(512 * 1024) } })),
       ...tail,
     ]);
   }

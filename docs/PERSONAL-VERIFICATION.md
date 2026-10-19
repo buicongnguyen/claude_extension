@@ -1,5 +1,15 @@
 # Personal fork verification
 
+## Version 2.15.10 — account-focused mode and large-history safeguards
+
+The default now opens Account and skips session/history watchers, process polling, search indexing, CLI model scans and detailed transcript usage aggregation. Profile switching, saved-account logs and local quota remain available; detailed usage charts are hidden. Disable Claude Manager: Account Focused Mode and reload for optional full history features.
+
+- Full suite: **4,136 passed / 19 failed**, 4,155 tests across 308 files. All failure identities exactly match the known 2.15.9 Windows baseline. [Validation](VALIDATION-2.15.10.json).
+- Eighteen added regressions cover bounded UTF-8 records and offsets, preview retention, worker queues/timeouts/failure recovery and account-focused suppression of expensive work. Existing async watcher tests now await worker replies; reload tests allow asynchronous index completion after the UI marker.
+- A real production-client/worker stress run with a synthetic 512 MiB oversized record completed list, detail, indexing and tail search in 337 ms; main-process maximum heartbeat gap 24 ms, main heap 6 MiB, measured peak process RSS 97 MiB. The worker has a separate 256 MiB old-generation V8 limit, an eight-job queue cap and a 60-second deadline. These bounds are not a whole-process/native-memory guarantee.
+- TypeScript, configured Biome (131 files) and extension/webview/CSS builds pass. No real conversation, account switch or credential was used by validation.
+- See [performance details and limitations](PERFORMANCE-2.15.10.md). Stability in the running VS Code host still needs observation after activating the update.
+
 ## Version 2.15.9 — saved account switch logs
 
 Switch attempts and startup recovery now retain local diagnostics across reloads. Logs use a fixed vocabulary without account or credential details; the viewer opens a revalidated snapshot. File rotation targets eight 256 KiB files, and logging failure does not interrupt credential operations. Explicit cancellations, save failures, verified backend commit/restore and subsequent reload errors remain distinguishable. Target metadata is read before a live commit. See [feature details](ACCOUNT-LOGS-2.15.9.md).

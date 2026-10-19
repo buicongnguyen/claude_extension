@@ -72,6 +72,8 @@ export interface Session {
 
 /** A session with a page of its message transcript loaded. */
 export interface SessionDetail extends Session {
+  /** Large records/text or search hits were omitted from the bounded preview. */
+  previewLimited?: boolean;
   /** Conversation messages for the current page (first or last N) */
   messages: Message[];
   /** Total messages across the entire session (for toggle visibility) */

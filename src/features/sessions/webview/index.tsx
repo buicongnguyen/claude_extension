@@ -12,6 +12,7 @@
 import { useEffect } from "preact/hooks";
 import { SessionsSkeleton } from "../../../webview/app/tabs/skeletons";
 import {
+  accountFocusedMode,
   activeTab,
   registerFeatureHandler,
   registerPaletteSource,
@@ -100,6 +101,20 @@ export default function SessionsTab() {
   // message arrives, show the content-shaped <SessionsSkeleton /> (actions +
   // search + filters + session rows) rather than the empty list (which would
   // read as "No sessions yet").
+  if (accountFocusedMode.value)
+    return (
+      <div class="panel">
+        <h3>Account-focused mode</h3>
+        <p>
+          History scanning is paused to keep VS Code light. Account switching and saved profiles
+          remain available in Account.
+        </p>
+        <p>
+          For history browsing, turn off Claude Manager: Account Focused Mode in VS Code settings
+          and reload the window.
+        </p>
+      </div>
+    );
   if (viewSignal.value === "detail") return <DetailView />;
   if (!loadedSignal.value) return <SessionsSkeleton />;
   return <ListView />;

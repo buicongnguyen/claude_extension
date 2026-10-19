@@ -1,3 +1,4 @@
+import { isAccountFocusedMode, setAccountFocusedMode } from "../core/workloadPolicy";
 // Modified for the personal fork, September 2026. See NOTICE.
 /**
  * Extension entry point — registers the webview view provider, open command,
@@ -40,6 +41,7 @@ import { exportBrain } from "../features/brain/exporter";
 import { importBrain, previewConflicts, readManifest } from "../features/brain/importer";
 import { reportIssueCommand, runDiagnosticsCommand } from "../features/diagnostics/commands";
 import { initializeProfileVault, closeProfileVault } from "../features/account/profileVault";
+import { disposeSessionWorker } from "../features/sessions/sessionWorkerClient";
 import { recoverPendingSwitch } from "../features/account/liveSwitch";
 import { initializeAccountAudit, closeAccountAudit, withAccountAudit, auditAccountEvent, safeAccountErrorCode } from "../features/account/accountAudit";
 import { showAccountSwitchLog } from "./accountSwitchLog";
@@ -68,6 +70,7 @@ function timedStep(label: string, fn: () => void): void {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  setAccountFocusedMode(vscode.workspace.getConfiguration("claudeManager").get<boolean>("accountFocusedMode", true));
   if (vscode.extensions.getExtension("vishalguptax.claude-manager")) {
     const message = "Disable or uninstall the original Claude Code Manager and reload VS Code before using the Personal fork. Both extensions share commands and Claude's live login.";
     void vscode.window.showErrorMessage(message);
@@ -75,6 +78,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   initializeAccountAudit(path.join(context.globalStorageUri.fsPath, "logs"), context.extension?.packageJSON?.version ?? "unknown");
   context.subscriptions.push({ dispose: closeAccountAudit });
+  context.subscriptions.push({ dispose: disposeSessionWorker });
   context.subscriptions.push(vscode.commands.registerCommand("claudeManager.showAccountSwitchLog", showAccountSwitchLog));
   // Initialize logging before storage so startup recovery errors are retained.
   await withAccountAudit("recovery", async () => {
@@ -149,8 +153,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Resume to View for the terminal hosting that session, regardless of
   // how it was started. Gated on consent and idempotent; see
   // sessionTapPolicy. Failures must not block activation.
-  timedStep("syncSessionTap", () => syncSessionTap(path.join(__dirname)));
-  context.subscriptions.push(watchTerminalLinkingSetting(path.join(__dirname)));
+  if (!isAccountFocusedMode()) {
+    timedStep("syncSessionTap", () => syncSessionTap(path.join(__dirname)));
+    context.subscriptions.push(watchTerminalLinkingSetting(path.join(__dirname)));
+  }
 
   const provider = new ClaudeSessionViewProvider(
     context.extensionUri,
@@ -165,7 +171,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // froze the host for seconds. Re-push accountData once they resolve so a
   // panel opened mid-warm fills in.
   const warmStartedAt = Date.now();
-  void Promise.allSettled([warmModelCache(), warmUsageAggregate()]).then(() => {
+  if (!isAccountFocusedMode()) void Promise.allSettled([warmModelCache(), warmUsageAggregate()]).then(() => {
     const elapsedMs = Date.now() - warmStartedAt;
     if (elapsedMs > 2_000) {
       console.warn(`[claude-manager] slow activation warm took ${elapsedMs}ms`);
@@ -173,7 +179,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     provider.refreshAccountData();
   });
 
-  context.subscriptions.push(startActiveSessionWatcher(provider.terminals));
+  if (!isAccountFocusedMode()) context.subscriptions.push(startActiveSessionWatcher(provider.terminals));
 
   // The container is contributed to BOTH the activity bar and the
   // secondary sidebar, so the panel can be opened from either side. The
@@ -565,5 +571,6 @@ async function offerQuotaNudge(context: vscode.ExtensionContext): Promise<void> 
  * Release the in-memory audit destination when the host deactivates.
  */
 export function deactivate(): void {
+  disposeSessionWorker();
   closeAccountAudit();
 }

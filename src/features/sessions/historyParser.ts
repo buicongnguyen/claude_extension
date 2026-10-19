@@ -401,13 +401,13 @@ function readOrphanSessionDataUncached(filePath: string): OrphanData | null {
           if (!firstPrompt) {
             const content = entry.message.content;
             if (typeof content === "string") {
-              firstPrompt = content;
+              firstPrompt = content.slice(0, 32 * 1024);
             } else if (Array.isArray(content)) {
               const text = content
                 .map((b) => (typeof b.text === "string" ? b.text : ""))
                 .filter(Boolean)
                 .join(" ");
-              if (text) firstPrompt = text;
+              if (text) firstPrompt = text.slice(0, 32 * 1024);
             }
           }
         }
@@ -433,7 +433,13 @@ function readOrphanSessionDataUncached(filePath: string): OrphanData | null {
 
   // A file with no user messages isn't a real session — skip it so
   // empty shells (queue-operation-only files) don't clutter the list.
-  if (!firstPrompt || messageCount === 0) return null;
+  if (!firstPrompt || messageCount === 0) {
+    if (!decoder.skippedLines) return null;
+    firstPrompt = "Conversation preview unavailable (oversized record)";
+    if (!lastTimestamp) {
+      try { lastTimestamp = fs.statSync(filePath).mtimeMs; } catch { /* file may have moved */ }
+    }
+  }
 
   return {
     cwd,

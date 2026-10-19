@@ -8,7 +8,7 @@
  *
  * Pure Node.js file I/O, no VS Code dependency.
  */
-import { parseJsonlFile, getSessionFile } from "./metaParser";
+import { iterateJsonlFile, getSessionFile } from "./metaParser";
 import { parseSessions } from "./historyParser";
 import type {
   Session,
@@ -99,8 +99,16 @@ export function parseSessionDetail(
   // triggering a second request shape.
   const q = query?.trim().toLowerCase() ?? "";
 
-  const entries = parseJsonlFile<SessionEntry>(sessionFile);
+  let previewLimited = false;
+  const entries = iterateJsonlFile<SessionEntry>(sessionFile, () => { previewLimited = true; });
   const allMessages: Message[] = [];
+  let total = 0;
+  let totalMatches = 0;
+  let totalToolUses = 0;
+  let hasUsage = false;
+  const totalUsage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  const MAX_MATCHES = 200;
+  const MAX_PREVIEW_CHARS = 32 * 1024;
 
   for (const entry of entries) {
     if (!entry.message?.role) continue;
@@ -160,13 +168,14 @@ export function parseSessionDetail(
       content.length > 0 || toolUses.length > 0 || thinkingText.length > 0;
     if (!hasUsable) continue;
 
+    if (content.length > MAX_PREVIEW_CHARS || thinkingText.length > MAX_PREVIEW_CHARS || toolUses.length > 100) previewLimited = true;
     const msg: Message = {
       role: role as "user" | "assistant",
-      content,
+      content: content.slice(0, MAX_PREVIEW_CHARS),
       timestamp: entry.timestamp ?? "",
     };
-    if (toolUses.length > 0) msg.toolUses = toolUses;
-    if (thinkingText) msg.thinking = thinkingText;
+    if (toolUses.length > 0) msg.toolUses = toolUses.slice(0, 100);
+    if (thinkingText) msg.thinking = thinkingText.slice(0, MAX_PREVIEW_CHARS);
     if (role === "assistant") {
       const u = entry.message.usage;
       if (u) {
@@ -187,68 +196,34 @@ export function parseSessionDetail(
         msg.model = entry.message.model;
       }
     }
-    allMessages.push(msg);
-  }
-
-  const total = allMessages.length;
-
-  // Session-wide token + tool totals summed across every message so
-  // the detail view can show a "spent X on this session" line
-  // without the caller recomputing from a paged message list.
-  let totalToolUses = 0;
-  let hasUsage = false;
-  const totalUsage = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheCreation: 0,
-  };
-  for (const m of allMessages) {
-    if (m.toolUses) totalToolUses += m.toolUses.length;
-    if (m.usage) {
+    total++;
+    totalToolUses += toolUses.length;
+    if (msg.usage) {
       hasUsage = true;
-      totalUsage.input += m.usage.input;
-      totalUsage.output += m.usage.output;
-      totalUsage.cacheRead += m.usage.cacheRead;
-      totalUsage.cacheCreation += m.usage.cacheCreation;
+      totalUsage.input += msg.usage.input;
+      totalUsage.output += msg.usage.output;
+      totalUsage.cacheRead += msg.usage.cacheRead;
+      totalUsage.cacheCreation += msg.usage.cacheCreation;
+    }
+    if (q) {
+      // Match against the complete bounded record, retain only a limited preview.
+      const haystack = [content, thinkingText, ...toolUses.map(t => t.name + " " + t.arg)].join("\n").toLowerCase();
+      if (haystack.includes(q)) {
+        totalMatches++;
+        if (allMessages.length < MAX_MATCHES) allMessages.push(msg);
+      }
+    } else if (mode === "first") {
+      if (allMessages.length < DETAIL_PAGE_SIZE) allMessages.push(msg);
+    } else {
+      allMessages.push(msg);
+      if (allMessages.length > DETAIL_PAGE_SIZE) allMessages.shift();
     }
   }
-
-  // Query-mode: filter across the full transcript and return every
-  // match. We intentionally skip paging here — search exists
-  // specifically to let users find things beyond the 50-msg window,
-  // so truncating hits would defeat the feature. On long sessions
-  // (10k+ msgs) the match set stays small in practice because
-  // queries are specific enough.
-  //
-  // Matching fields: content, thinking, tool name + arg. Case-
-  // insensitive substring (haystack pre-lowered at compare time to
-  // avoid allocating lowercased copies of entire transcripts when
-  // most messages won't match).
-  if (q) {
-    const matches: Message[] = [];
-    for (const m of allMessages) {
-      const haystack = [
-        m.content,
-        m.thinking ?? "",
-        ...(m.toolUses ?? []).map((t) => `${t.name} ${t.arg}`),
-      ]
-        .join("\n")
-        .toLowerCase();
-      if (haystack.includes(q)) matches.push(m);
-    }
-    return {
-      ...session,
-      messages: matches,
-      messageCount: matches.length,
-      totalMessages: total,
-      detailMode: mode,
-      detailQuery: q,
-      totalMatches: matches.length,
-      totalToolUses,
-      ...(hasUsage ? { totalUsage } : {}),
-    };
-  }
+  if (q) return {
+    ...session, messages: allMessages, messageCount: allMessages.length,
+    totalMessages: total, detailMode: mode, detailQuery: q, totalMatches,
+    previewLimited: previewLimited || totalMatches > MAX_MATCHES, totalToolUses, ...(hasUsage ? { totalUsage } : {}),
+  };
 
   // Default paged view (no query).
   const page = mode === "first"
@@ -259,6 +234,7 @@ export function parseSessionDetail(
     ...session,
     messages: page,
     messageCount: page.length,
+    previewLimited,
     totalMessages: total,
     detailMode: mode,
     totalToolUses,

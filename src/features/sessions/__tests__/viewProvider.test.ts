@@ -524,9 +524,9 @@ describe("ClaudeSessionViewProvider", () => {
     // Quota rides its own message — Refresh must re-push it, since the
     // webview won't refetch quota for an unchanged identity on its own.
     expect(types).toContain("quotaData");
-    // reloadComplete must be the final wire event so the webview can
-    // safely drop the spinner once it arrives.
-    expect(types[types.length - 1]).toBe("reloadComplete");
+    // The background worker can announce index readiness after the UI reload.
+    expect(types.indexOf("reloadComplete")).toBeGreaterThan(types.indexOf("accountData"));
+    expect(types.indexOf("reloadComplete")).toBeGreaterThan(types.indexOf("sessions"));
 
     // (a) DATA — the global reload clears the full-text search index and
     // the account caches (model scan + usage aggregate) so Refresh returns

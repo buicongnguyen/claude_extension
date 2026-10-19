@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as vscode from "vscode";
 import * as path from "path";
+import { setAccountFocusedMode } from "../../../core/workloadPolicy";
 
 /**
  * Watcher dispatch tests. We exercise `createWatchers` directly with a
@@ -150,7 +151,7 @@ describe("createWatchers — transcript change refreshes the Usage tab", () => {
     // Nothing fires before the 1000ms session-reparse debounce elapses.
     expect(posted.map((m) => m.type)).not.toContain("accountData");
 
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     // The usage re-push awaits warmUsageAggregate — flush the microtask queue
     // so its continuation (the accountData post) runs before we assert.
     await Promise.resolve();
@@ -177,7 +178,7 @@ describe("createWatchers — transcript change refreshes the Usage tab", () => {
       fsPath: path.join(w.base, "slug", "missing.jsonl"),
     } as vscode.Uri;
     for (const h of w.handlers) h(fakeUri);
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -186,7 +187,7 @@ describe("createWatchers — transcript change refreshes the Usage tab", () => {
     disposable.dispose();
   });
 
-  it("flushes the reparse by the max-wait cap under continuous appends", () => {
+  it("flushes the reparse by the max-wait cap under continuous appends", async () => {
     // A live session appends ~1/sec. Firing every 900ms keeps resetting the
     // 1000ms trailing debounce, so a pure trailing debounce would never flush
     // while generating. The 3000ms max-wait cap must force a flush anyway.
@@ -197,7 +198,7 @@ describe("createWatchers — transcript change refreshes the Usage tab", () => {
 
     for (let elapsed = 0; elapsed < 3000; elapsed += 900) {
       for (const h of w.handlers) h(uri);
-      vi.advanceTimersByTime(900);
+      await vi.advanceTimersByTimeAsync(900);
     }
 
     expect(posted.map((m) => m.type)).toContain("sessions");
@@ -220,7 +221,7 @@ describe("createWatchers — config artifacts update live", () => {
     ["agents", "**/*.md"],
     ["mcp", "mcp.json"],
     ["hooks", "settings.json"],
-  ])("re-parses %s when its files change (debounced)", (feature, glob) => {
+  ])("re-parses %s when its files change (debounced)", async (feature, glob) => {
     const ctx = makeCtx();
     const disposable = createWatchers(ctx);
 
@@ -229,13 +230,13 @@ describe("createWatchers — config artifacts update live", () => {
 
     // Nothing before the per-feature debounce elapses.
     expect(reloadedFeatures).not.toContain(feature);
-    vi.advanceTimersByTime(250);
+    await vi.advanceTimersByTimeAsync(250);
     expect(reloadedFeatures).toContain(feature);
 
     disposable.dispose();
   });
 
-  it("coalesces a burst of edits into a single reparse", () => {
+  it("coalesces a burst of edits into a single reparse", async () => {
     const ctx = makeCtx();
     const disposable = createWatchers(ctx);
 
@@ -244,22 +245,39 @@ describe("createWatchers — config artifacts update live", () => {
       for (const h of w.handlers) h({ fsPath: "x" } as vscode.Uri);
     };
     fire();
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
     fire(); // resets the debounce
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
     fire();
-    vi.advanceTimersByTime(250);
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(reloadedFeatures.filter((f) => f === "skills")).toHaveLength(1);
 
     disposable.dispose();
   });
 
-  it("does not fire any config reload before files change", () => {
+  it("does not fire any config reload before files change", async () => {
     const ctx = makeCtx();
     const disposable = createWatchers(ctx);
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(reloadedFeatures).toEqual([]);
     disposable.dispose();
+  });
+});
+
+
+describe("account-focused watcher fleet", () => {
+  it("keeps account/quota watching while registering no transcript or PID watchers", () => {
+    setAccountFocusedMode(true);
+    const disposable = createWatchers(makeCtx());
+    try {
+      const globs = captured.map(w => w.glob);
+      expect(globs).toContain(".claude.json");
+      expect(globs.some(glob => glob.includes("statusline.json"))).toBe(true);
+      expect(globs).not.toContain("history.jsonl");
+      expect(globs).not.toContain("**/*.jsonl");
+      expect(globs).not.toContain("*.json");
+      expect(globs).not.toContain("**/SKILL.md");
+    } finally { disposable.dispose(); setAccountFocusedMode(false); }
   });
 });

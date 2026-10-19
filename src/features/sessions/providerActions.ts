@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 /**
  * Host-side orchestration actions for the sessions view provider, kept
  * out of the provider so it stays a thin lifecycle coordinator.
@@ -17,11 +18,9 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import {
-  parseSessions,
   groupSessions,
   getStats,
   getUniqueProjects,
-  getLastParseWarning,
   getSessionFile,
   readLiveSessions,
   applyLiveState,
@@ -29,7 +28,8 @@ import {
   clearOrphanCache,
   clearPendingCache,
 } from "./parser";
-import { indexSession, pruneIndex, clearIndex } from "./searchIndex";
+import { clearIndex } from "./searchIndex";
+import { parseSessionsAsync, indexSessionsAsync, getWorkerParseWarning as getLastParseWarning } from "./sessionWorkerClient";
 import { postWorktrees } from "./worktreeEnrichment";
 import { clearWorktreeCache } from "../../extension/worktrees";
 import { slugifyProjectPath } from "./portable";
@@ -149,10 +149,11 @@ export function refreshAccountData(ctx: ProviderActionsContext): void {
  * coalesce into a single UI update.
  */
 export function refreshLiveState(ctx: ProviderActionsContext): void {
+  if (isAccountFocusedMode()) return;
   const existing = ctx.getLiveStateRefreshTimer();
   if (existing) clearTimeout(existing);
   ctx.setLiveStateRefreshTimer(
-    setTimeout(() => {
+    setTimeout(async () => {
       ctx.setLiveStateRefreshTimer(undefined);
       const wv = ctx.getWebview();
       if (!wv) return;
@@ -171,7 +172,7 @@ export function refreshLiveState(ctx: ProviderActionsContext): void {
         const missing = [...live.keys()].filter((id) => !known.has(id));
         let added = false;
         if (missing.length > 0) {
-          const byId = new Map(parseSessions(loadState().renames).map((s) => [s.id, s]));
+          const byId = new Map((await parseSessionsAsync(loadState().renames)).map((s) => [s.id, s]));
           for (const id of missing) {
             const fresh = byId.get(id);
             if (fresh) {
@@ -214,38 +215,18 @@ export function refreshLiveState(ctx: ProviderActionsContext): void {
  * query text itself changed.
  */
 export function buildSearchIndex(ctx: ProviderActionsContext): void {
-  const myGen = ctx.nextIndexBuildGen();
-  const snapshot = ctx.getSessions().slice();
-  // Drop stale ids (deleted sessions) but KEEP entries for unchanged
-  // files — indexSession's mtime gate skips those without re-extracting.
-  pruneIndex(new Set(snapshot.map((s) => s.id)));
-  const CHUNK = 50;
-  const processChunk = (start: number): void => {
-    if (ctx.isDisposed()) return; // webview disposed — abort
-    if (ctx.getIndexBuildGen() !== myGen) return; // superseded by newer build
-    for (let i = start; i < Math.min(start + CHUNK, snapshot.length); i++) {
-      const s = snapshot[i];
-      // Prefer the parser's on-disk index — authoritative across every
-      // platform/tool. projectPath-derived slug is a fallback for when
-      // the index has not yet picked up a fresh write.
-      const indexed = getSessionFile(s.id);
-      const filePath =
-        indexed ??
-        (s.projectPath
-          ? path.join(PROJECTS_DIR, slugifyProjectPath(s.projectPath), s.id + ".jsonl")
-          : "");
-      if (!filePath) continue;
-      indexSession(s.id, filePath);
-    }
-    if (start + CHUNK < snapshot.length) {
-      setTimeout(() => processChunk(start + CHUNK), 0);
-      return;
-    }
-    // Last chunk. Only the build that is still current may announce readiness —
-    // a superseded build returned above, so its stale "ready" never fires.
-    ctx.getWebview()?.postMessage({ type: "searchIndexReady" });
-  };
-  setTimeout(() => processChunk(0), 0);
+  if (isAccountFocusedMode()) return;
+  const generation = ctx.nextIndexBuildGen();
+  const files = ctx.getSessions().flatMap(session => {
+    const file = getSessionFile(session.id) ?? (session.projectPath
+      ? path.join(PROJECTS_DIR, slugifyProjectPath(session.projectPath), session.id + ".jsonl") : "");
+    return file ? [{ id: session.id, path: file }] : [];
+  });
+  void indexSessionsAsync(files).then(() => {
+    if (!ctx.isDisposed() && ctx.getIndexBuildGen() === generation) ctx.getWebview()?.postMessage({ type: "searchIndexReady" });
+  }).catch(() => {
+    if (!ctx.isDisposed() && ctx.getIndexBuildGen() === generation) ctx.getWebview()?.postMessage({ type: "error", message: "Conversation search paused safely. Refresh Manager to retry." });
+  });
 }
 
 /**
@@ -260,6 +241,7 @@ export function refreshSettings(ctx: ProviderActionsContext): void {
   const rootConfig = vscode.workspace.getConfiguration("claudeManager");
   wv.postMessage({
     type: "settings",
+    accountFocusedMode: isAccountFocusedMode(),
     defaultFilter: sessConfig.get<string>("defaultFilter", "recent"),
     defaultProject: sessConfig.get<string>("defaultProject", "current"),
     restoreCount: sessConfig.get<number>("restoreCount", 4),
@@ -323,6 +305,16 @@ export async function reloadAll(ctx: ProviderActionsContext): Promise<void> {
   const wv = ctx.getWebview();
   if (!wv) return;
 
+  if (isAccountFocusedMode()) {
+    postAccountData(wv, parseAccountData(getWorkspace() || undefined));
+    const quota = readQuota(getWorkspace() || undefined);
+    rememberActiveQuota(quota);
+    wv.postMessage({ type: "quotaData", result: quota });
+    ctx.refreshSettings();
+    wv.postMessage({ type: "reloadComplete" });
+    return;
+  }
+
   // (a) DATA — drop every module-level cache so the re-parse is cold.
   clearMetaCaches();
   clearOrphanCache();
@@ -355,10 +347,10 @@ export async function reloadAll(ctx: ProviderActionsContext): Promise<void> {
     new Promise<void>((r) => setImmediate(r));
 
   type ParseResult<T> = { ok: true; data: T } | { ok: false };
-  const safe = async <T>(fn: () => T, label: string): Promise<ParseResult<T>> => {
+  const safe = async <T>(fn: () => T | Promise<T>, label: string): Promise<ParseResult<T>> => {
     try {
       await yieldEventLoop();
-      return { ok: true, data: fn() };
+      return { ok: true, data: await fn() };
     } catch (err) {
       console.warn(`[claude-manager] reload ${label} failed:`, err);
       return { ok: false };
@@ -375,7 +367,7 @@ export async function reloadAll(ctx: ProviderActionsContext): Promise<void> {
     mcpResult,
     agentsResult,
   ] = await Promise.all([
-    safe(() => parseSessions(renames), "sessions"),
+    safe(() => parseSessionsAsync(renames, true), "sessions"),
     safe(() => parseAccountData(ws), "account"),
     safe(() => parseSkills(ws), "skills"),
     safe(() => parseCommands(ws), "commands"),

@@ -52,17 +52,17 @@ const INDEX_MAX_ENTRIES = 2000;
  * per-session cap — is what bounds index memory: raising MAX_CONTENT_CHARS to
  * 2 MB would allow 2000 × 2 MB with an entry-count bound alone, so the budget
  * evicts least-recently-used sessions until the total fits. At ~85 KB of
- * extracted text per session (real-corpus average) 256M characters holds
- * roughly 3000 sessions fully indexed.
+ * extracted text per session (real-corpus average) 32M characters holds
+ * roughly 390 sessions fully indexed.
  *
  * Known limit: an evicted session has no entry, so it is skipped by search
- * entirely — the tail scan only covers sessions that ARE indexed. Past ~3000
+ * entirely — the tail scan only covers sessions that ARE indexed. Past the memory budget,
  * sessions the coldest ones stop matching. Not addressed here because it needs
  * a persisted on-disk index to fix properly, and the alternative (an entry
  * stub per evicted session, tail-scanned on demand) trades that silence for a
  * search that streams thousands of files.
  */
-const INDEX_MAX_CHARS = 256 * 1024 * 1024;
+const INDEX_MAX_CHARS = 32 * 1024 * 1024;
 
 /**
  * sessionId -> { mtimeMs of the source file, lowercased searchable
@@ -188,8 +188,8 @@ function extractContent(filePath: string, startOffset = 0): Extracted {
       bytesRead = fs.readSync(fd, buf, 0, READ_CHUNK, pos);
       if (bytesRead === 0) break;
       pos += bytesRead;
-      for (const line of decoder.push(buf, bytesRead)) {
-        lineOffset += Buffer.byteLength(line) + 1; // + the "\n" we split on
+      for (const { line, byteLength } of decoder.pushWithOffsets(buf, bytesRead)) {
+        lineOffset += byteLength; // + the "\n" we split on
         if (!line.trim()) continue;
         const text = extractLineText(line);
         if (!text) continue;

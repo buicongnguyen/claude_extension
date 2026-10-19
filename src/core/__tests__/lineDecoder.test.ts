@@ -113,3 +113,28 @@ describe("createLineDecoder", () => {
     expect(dec.end()).toBe("");
   });
 });
+
+
+describe("bounded records", () => {
+  it("discards an oversized multi-chunk line and recovers at its newline", () => {
+    const decoder = createLineDecoder(12);
+    expect(decoder.push(Buffer.from("1234567890"), 10)).toEqual([]);
+    expect(decoder.push(Buffer.from("xxxxxxxxxx"), 10)).toEqual([]);
+    expect(decoder.push(Buffer.from("tail\n{\"ok\":1}\n"), 14)).toEqual(["", "{\"ok\":1}"]);
+    expect(decoder.end()).toBe(""); expect(decoder.skippedLines).toBe(1);
+  });
+  it("reports exact skipped UTF-8 byte offsets for search continuation", () => {
+    const decoder = createLineDecoder(4);
+    const data = Buffer.from("你好\nok\n");
+    expect(decoder.pushWithOffsets(data, data.length)).toEqual([{ line: "", byteLength: 7 }, { line: "ok", byteLength: 3 }]);
+  });
+  it("never returns an oversized unfinished final record", () => {
+    const decoder = createLineDecoder(4);
+    decoder.push(Buffer.from("12345"), 5);
+    expect(decoder.end()).toBe(""); expect(decoder.skippedLines).toBe(1);
+  });
+  it("accepts the exact limit and keeps short reads safe", () => {
+    const decoder = createLineDecoder(4);
+    expect(decoder.push(Buffer.from("1234\nignored"), 5)).toEqual(["1234"]);
+  });
+});

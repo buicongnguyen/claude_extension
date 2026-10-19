@@ -129,6 +129,7 @@ export function handleMessage(msg: Message): void {
         defaultFilter?: string;
         defaultProject?: string;
         demoSeen?: boolean;
+        accountFocusedMode?: boolean;
       };
       if (typeof m.restoreCount === "number") {
         restoreCountSignal.value = m.restoreCount;
@@ -136,7 +137,7 @@ export function handleMessage(msg: Message): void {
       applyDefaultFilters(m.defaultFilter, m.defaultProject);
       // First-run intro plays once per install; the host gates it via the
       // persisted demoSeen flag carried on this settings push.
-      if (typeof m.demoSeen === "boolean") maybeShowIntro(m.demoSeen);
+      if (!m.accountFocusedMode && typeof m.demoSeen === "boolean") maybeShowIntro(m.demoSeen);
       break;
     }
     default:

@@ -20,7 +20,7 @@
 import { useEffect } from "preact/hooks";
 import type { Message } from "../../../shared/protocol/messages";
 import { AccountSkeleton } from "../../../webview/app/tabs/skeletons";
-import { registerFeatureHandler } from "../../../webview/shared/model";
+import { accountFocusedMode, registerFeatureHandler } from "../../../webview/shared/model";
 import { EmptyState, SlowLoadNotice, useLoadPhase } from "../../../webview/shared/ui";
 import type { QuotaResult } from "../quota";
 import type { AccountData } from "../types";
@@ -143,7 +143,14 @@ export default function AccountTab() {
     <div class="panel">
       <ProfileView data={data} api={api} />
       <QuotaView api={api} />
-      <UsageView data={data} />
+      {accountFocusedMode.value ? (
+        <div class="d-notice">
+          Account-focused mode: detailed usage and conversation history are paused to keep VS Code
+          light.
+        </div>
+      ) : (
+        <UsageView data={data} />
+      )}
     </div>
   );
 }

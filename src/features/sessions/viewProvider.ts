@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 /**
  * Provides the webview content for the Claude Manager sidebar panel and
  * wires the host side together: lifecycle, the webview HTML shell, the
@@ -279,7 +280,7 @@ export class ClaudeSessionViewProvider
     this.viewSubscriptions.push(
       view.onDidChangeVisibility(() => {
         if (this.anyVisible()) {
-          this.livePoll.start();
+          if (!isAccountFocusedMode()) this.livePoll.start();
           // Re-sync on re-show: while hidden, sessions may have died
           // without the poller catching it. One immediate refresh closes
           // the gap before the slow tick kicks back in.
@@ -349,7 +350,7 @@ export class ClaudeSessionViewProvider
       }),
     );
 
-    this.livePoll.start();
+    if (!isAccountFocusedMode()) this.livePoll.start();
   }
 
   private disposeLifecycle(): void {

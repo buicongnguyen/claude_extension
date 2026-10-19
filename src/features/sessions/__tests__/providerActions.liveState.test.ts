@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe("refreshLiveState self-heal", () => {
-  it("pulls in a live session missing from the cached list and posts it", () => {
+  it("pulls in a live session missing from the cached list and posts it", async () => {
     const sessions: Array<{ id: string; project: string; endTime: number }> = [];
     const env = makeCtx(sessions);
     readLiveSessions.mockReturnValue(
@@ -79,7 +79,7 @@ describe("refreshLiveState self-heal", () => {
     applyLiveState.mockReturnValue(true);
 
     refreshLiveState(env.ctx as never);
-    vi.advanceTimersByTime(200);
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(env.sessions.map((s) => s.id)).toContain("new-id");
     expect(env.posted.some((p) => p.type === "sessions")).toBe(true);
@@ -87,7 +87,7 @@ describe("refreshLiveState self-heal", () => {
     expect(env.ctx.buildSearchIndex).toHaveBeenCalled();
   });
 
-  it("does not reparse when every live session is already cached", () => {
+  it("does not reparse when every live session is already cached", async () => {
     const sessions = [{ id: "known", project: "p", endTime: 1 }];
     const env = makeCtx(sessions);
     readLiveSessions.mockReturnValue(
@@ -96,13 +96,13 @@ describe("refreshLiveState self-heal", () => {
     applyLiveState.mockReturnValue(false);
 
     refreshLiveState(env.ctx as never);
-    vi.advanceTimersByTime(200);
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(parseSessions).not.toHaveBeenCalled();
     expect(env.posted).toEqual([]);
   });
 
-  it("still posts a plain live-state change with no additions", () => {
+  it("still posts a plain live-state change with no additions", async () => {
     const sessions = [{ id: "known", project: "p", endTime: 1 }];
     const env = makeCtx(sessions);
     readLiveSessions.mockReturnValue(
@@ -111,7 +111,7 @@ describe("refreshLiveState self-heal", () => {
     applyLiveState.mockReturnValue(true);
 
     refreshLiveState(env.ctx as never);
-    vi.advanceTimersByTime(200);
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(parseSessions).not.toHaveBeenCalled();
     expect(env.posted.filter((p) => p.type === "sessions")).toHaveLength(1);

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { Message } from "../../../../shared/protocol/schemas";
 import {
   activeTab,
+  accountFocusedMode,
   applyShellSettings,
   density,
   hiddenTabsPref,
@@ -136,5 +137,21 @@ describe("globalSignals", () => {
       applyShellSettings({ type: "ack" } as Message);
       expect(hiddenTabsPref.value).toEqual(["skills"]);
     });
+  });
+});
+
+
+describe("account-focused navigation", () => {
+  beforeEach(() => { accountFocusedMode.value = false; activeTab.value = "sessions"; });
+  it("opens Account when the mode is first announced", () => {
+    applyShellSettings({ type: "settings", accountFocusedMode: true });
+    expect(activeTab.value).toBe("account"); expect(accountFocusedMode.value).toBe(true);
+  });
+  it("allows the user to inspect the paused Sessions tab after startup", () => {
+    applyShellSettings({ type: "settings", accountFocusedMode: true });
+    activeTab.value = "sessions";
+    applyShellSettings({ type: "settings", accountFocusedMode: true });
+    expect(activeTab.value).toBe("sessions");
+    accountFocusedMode.value = false;
   });
 });

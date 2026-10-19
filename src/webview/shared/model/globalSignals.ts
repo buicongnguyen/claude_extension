@@ -5,6 +5,7 @@ import { signal } from "@preact/signals";
 import type { Message } from "../../../shared/protocol/schemas";
 
 export const activeTab = signal<string>("sessions");
+export const accountFocusedMode = signal(false);
 export const ready = signal<boolean>(false);
 export const theme = signal<"light" | "dark">("dark");
 
@@ -47,7 +48,16 @@ export const tabOrderPref = signal<string[]>([]);
  */
 export function applyShellSettings(msg: Message): void {
   if (msg.type !== "settings") return;
-  const raw = msg as { density?: unknown; hiddenTabs?: unknown; tabOrder?: unknown };
+  const raw = msg as {
+    accountFocusedMode?: boolean;
+    density?: unknown;
+    hiddenTabs?: unknown;
+    tabOrder?: unknown;
+  };
+  if (typeof raw.accountFocusedMode === "boolean") {
+    if (raw.accountFocusedMode && !accountFocusedMode.value) activeTab.value = "account";
+    accountFocusedMode.value = raw.accountFocusedMode;
+  }
   density.value = raw.density === "quiet" ? "quiet" : "comfortable";
   hiddenTabsPref.value = stringArray(raw.hiddenTabs);
   tabOrderPref.value = stringArray(raw.tabOrder);

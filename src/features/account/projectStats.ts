@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 /**
  * Single-pass JSONL aggregator for the Account / Usage tab.
  *
@@ -307,6 +308,7 @@ let warming: Promise<UsageAggregate> | null = null;
  * immediately and updates when the async pass completes.
  */
 export function aggregateUsage(): UsageAggregate {
+  if (isAccountFocusedMode()) return cachedResult ?? emptyAggregate();
   void warmUsageAggregate();
   return cachedResult ?? emptyAggregate();
 }
@@ -320,6 +322,7 @@ export function aggregateUsage(): UsageAggregate {
  * this, then read the now-warm cache via `aggregateUsage`.
  */
 export async function warmUsageAggregate(): Promise<UsageAggregate> {
+  if (isAccountFocusedMode()) return cachedResult ?? emptyAggregate();
   if (warming) return warming;
   warming = (async () => {
     try {
@@ -433,6 +436,7 @@ export async function warmUsageAggregate(): Promise<UsageAggregate> {
  * spinner.
  */
 export function isUsageAggregateWarming(): boolean {
+  if (isAccountFocusedMode()) return false;
   return cachedResult === null;
 }
 

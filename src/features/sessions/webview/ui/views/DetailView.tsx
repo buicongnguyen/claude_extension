@@ -437,6 +437,7 @@ export function DetailView() {
   return (
     <div class="panel" id="detailView">
       <BackButton label="All sessions" onClick={backToList} />
+      {d.previewLimited ? <div class="d-notice">Preview limited for a large conversation. Open it in Claude or export the original transcript for complete content.</div> : null}
 
       <div class="d-head">
         <div class="d-title" title={d.name || d.summary}>

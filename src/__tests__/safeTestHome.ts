@@ -13,3 +13,17 @@ afterAll(async () => {
   const fs = await vi.importActual<typeof import("fs")>("fs");
   if (state.directory) fs.rmSync(state.directory, { recursive: true, force: true });
 });
+
+vi.mock("../features/sessions/sessionWorkerClient", async () => {
+  const parser = await import("../features/sessions/parser");
+  const index = await import("../features/sessions/searchIndex");
+  return {
+    parseSessionsAsync: async (renames: Record<string, string>) => parser.parseSessions(renames),
+    reparseSessionsBatchAsync: async (ids: string[], renames: Record<string, string>) => parser.reparseSessionsBatch(ids, renames),
+    parseSessionDetailAsync: async (...args: Parameters<typeof parser.parseSessionDetail>) => parser.parseSessionDetail(...args),
+    indexSessionsAsync: async (files: {id: string; path: string}[]) => { index.pruneIndex(new Set(files.map(file => file.id))); for (const file of files) index.indexSession(file.id, file.path); },
+    searchContentAsync: async (query: string) => index.searchContent(query),
+    getWorkerParseWarning: () => null,
+    disposeSessionWorker: () => {},
+  };
+});

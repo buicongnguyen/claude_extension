@@ -1,3 +1,4 @@
+import { isAccountFocusedMode } from "../../core/workloadPolicy";
 // Modified for the personal fork, September 2026. See NOTICE.
 /**
  * Webview → host message handlers for the Account tab: live account data,
@@ -49,7 +50,7 @@ export async function handleAccountMessage(
       // for a user who isn't mid-session. Re-check on panel open and re-push
       // only if the scan actually changed. Cheap: an mtime/size stat unless
       // the binary moved.
-      void revalidateModelCache().then((changed) => {
+      if (!isAccountFocusedMode()) void revalidateModelCache().then((changed) => {
         const live = ctx.getWebview();
         if (changed && live) {
           postAccountData(live, parseAccountData(getWorkspace() || undefined));

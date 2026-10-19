@@ -1721,3 +1721,28 @@ function makeSession(
     searchHaystack: `${name}\n${project}\n${branch}\n${summary}`.toLowerCase(),
   };
 }
+
+
+describe("bounded detail previews", () => {
+  beforeEach(setup);
+  it("retains at most 200 search hits while counting the full match set", () => {
+    writeSessionFile("synthetic", "bounded-hits", Array.from({ length: 250 }, (_, i) => ({ cwd: "/synthetic", timestamp: "2026-10-20T00:00:00Z", message: { role: i === 0 ? "user" : "assistant", content: "needle " + i } })));
+    const detail = parseSessionDetail("bounded-hits", undefined, "last", "needle");
+    expect(detail?.messages).toHaveLength(200); expect(detail?.totalMatches).toBe(250); expect(detail?.previewLimited).toBe(true);
+  });
+  it("caps rendered text and thinking but keeps later valid messages", () => {
+    writeSessionFile("synthetic", "bounded-text", [
+      { cwd: "/synthetic", message: { role: "user", content: "start" } },
+      { message: { role: "assistant", content: [{ type: "text", text: "x".repeat(70000) }, { type: "thinking", thinking: "y".repeat(70000) }] } },
+      { message: { role: "assistant", content: "last" } },
+    ]);
+    const detail = parseSessionDetail("bounded-text");
+    expect(detail?.messages[1].content).toHaveLength(32768); expect(detail?.messages[1].thinking).toHaveLength(32768);
+    expect(detail?.messages.at(-1)?.content).toBe("last"); expect(detail?.previewLimited).toBe(true);
+  });
+  it("keeps a conversation visible when its only record is oversized", () => {
+    writeSessionFile("synthetic", "oversized-only", [{ cwd: "/synthetic", message: { role: "user", content: "x".repeat(2 * 1024 * 1024) } }]);
+    const session = parseSessions().find(s => s.id === "oversized-only");
+    expect(session?.summary).toContain("oversized record"); expect(session?.endTime).toBeGreaterThan(0);
+  });
+});
