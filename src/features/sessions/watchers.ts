@@ -30,6 +30,7 @@ import { loadState } from "./state";
 import { getTempSessionIds } from "../../extension/ephemeralSession";
 import { CLAUDE_MANAGER_DIR, STATUSLINE_CACHE_FILE } from "../../core/config";
 import { getWorkspace } from "../../extension/workspace";
+import { clearClaudeJsonCache } from "../account/claudeJsonCache";
 import { parseAccountData } from "../account/parser";
 import { revalidateModelCache } from "../account/models";
 import { warmUsageAggregate } from "../account/projectStats";
@@ -180,6 +181,7 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
 
   const onAccountChange = (uri: vscode.Uri): void => {
     const name = path.basename(uri.fsPath);
+    if (name === ".claude.json") clearClaudeJsonCache();
     if ((name === ".credentials.json" || name === ".claude.json") && !profileSyncTimer) {
       profileSyncAttempts = 0;
       profileSyncTimer = setTimeout(tryProfileSync, 200);

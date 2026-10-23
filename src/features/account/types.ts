@@ -432,6 +432,8 @@ export interface AccountData {
   activeProfileSlug: string | null;
   /** The current credentials differ from the saved snapshot; identity may need confirmation. */
   profileSnapshotChanged?: boolean;
+  /** Exact saved credentials and local identity metadata point to different accounts. */
+  profileIdentityMismatch?: boolean;
   /**
    * Settings.json snapshots taken before each `writeSettingsValue` /
    * permissions mutation. Newest first. Capped per scope by

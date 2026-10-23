@@ -58,6 +58,8 @@ vi.mock("../../account/profiles", () => ({
   syncActiveProfile: vi.fn(() => null),
 }));
 
+vi.mock("../../account/claudeJsonCache", () => ({ clearClaudeJsonCache: vi.fn() }));
+import { clearClaudeJsonCache } from "../../account/claudeJsonCache";
 import { syncActiveProfile } from "../../account/profiles";
 import { createWatchers, type WatcherContext } from "../watchers";
 
@@ -319,4 +321,15 @@ describe("background login snapshot retries", () => {
       expect(syncActiveProfile).toHaveBeenCalledTimes(1);
     } finally { d.dispose(); setAccountFocusedMode(false); }
   });
+});
+
+it("invalidates cached identity on config events before the next account parse", async () => {
+  vi.mocked(clearClaudeJsonCache).mockClear();
+  const d = createWatchers(makeCtx());
+  const w = captured.find(w => w.glob === ".claude.json")!;
+  w.handlers[0]({ fsPath: path.join(w.base, ".claude.json") } as vscode.Uri);
+  expect(clearClaudeJsonCache).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(200);
+  expect(__parseAccountCalls).toBeGreaterThan(0);
+  d.dispose();
 });

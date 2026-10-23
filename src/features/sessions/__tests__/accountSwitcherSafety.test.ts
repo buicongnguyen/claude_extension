@@ -219,3 +219,21 @@ describe("saved switch diagnostics", () => {
     expect(state.error).not.toHaveBeenCalled();
   });
 });
+
+it("does not relabel an exact-match saved account with another account's local email", async () => {
+  state.current = current("alice");
+  state.current.profile.email = "bob@example.test";
+  state.current.profile.accountUuid = "bob";
+  await openAccountSwitcher({ getWebview: () => undefined, dispatch: vi.fn() });
+  const item = state.picker.items.find((item: any) => item.slug === "alice");
+  expect(item.detail).toContain("alice@example.test");
+  expect(item.detail).not.toContain("bob@example.test");
+});
+
+it("allows a renamed email when the live and saved account UUID agree", async () => {
+  state.current = current("alice");
+  state.current.profile.accountUuid = "alice";
+  state.current.profile.email = "renamed@example.test";
+  await openAccountSwitcher({ getWebview: () => undefined, dispatch: vi.fn() });
+  expect(state.picker.items.find((item: any) => item.slug === "alice").detail).toContain("renamed@example.test");
+});

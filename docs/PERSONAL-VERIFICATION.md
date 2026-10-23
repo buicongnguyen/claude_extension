@@ -1,5 +1,14 @@
 # Personal fork verification
 
+## Version 2.15.13 — stale account identity repair
+
+- Full suite: **4,168 passed / 19 failed**, 4,187 tests across 311 files. All failure identities exactly match the last full Windows baseline (2.15.11); no new failures. [Validation](VALIDATION-2.15.13.json).
+- Three regressions failed before the change: relabelling a saved account with another account's email, reselecting the same account with stale identity metadata, and switching away from that inconsistent state. All pass after the fix.
+- Thirteen new regressions cover those failures, repeated alternating switches, preservation of saved credentials during repair, refusal for unknown rotated tokens, UUID/email comparison, identity-warning data/UI, legitimate email changes and watcher cache invalidation.
+- Focused tests: 96 passed across seven files. TypeScript, configured Biome (131 files), and production builds pass. Tests use synthetic accounts; no user login was switched, decrypted, or remotely validated.
+- [Behavior and recovery steps](ACCOUNT-IDENTITY-2.15.13.md). Metadata repair requires an explicit user selection and exact saved credentials. A server-rejected login still needs a fresh sign-in.
+
+
 ## Version 2.15.12 — saved-login timestamps
 
 Account warnings list each affected account on its own line with the last saved snapshot date, local time zone, and elapsed age. The account picker includes this information for every profile, including the active account. An active snapshot-change warning also includes its last saved time. These are save/update times, not independently observed sign-in times. Invalid or absent times show unknown; future times flag a clock discrepancy.

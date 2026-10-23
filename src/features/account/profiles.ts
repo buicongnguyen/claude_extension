@@ -42,7 +42,7 @@ import * as os from "os";
 import { getProfileDirectory } from "./profileVault";
 import { readAccountSnapshot, writeAccountSnapshot, SNAPSHOT_FILE, type AccountSnapshot } from "./accountSnapshot";
 import { hasPendingSwitch, recoverPendingSwitchUnlocked, writeLiveAccount } from "./liveSwitch";
-import { readClaudeJsonRaw } from "./claudeJsonCache";
+import { readClaudeJsonRaw, clearClaudeJsonCache } from "./claudeJsonCache";
 import { auditAccountEvent, safeAccountErrorCode } from "./accountAudit";
 import { withLocks, CREDENTIAL_LOCKS, CONFIG_LOCK, describeLockFailure } from "./claudeLocks";
 import {
@@ -721,7 +721,11 @@ export function switchProfile(slug: string, approval?: ProfileUpdateApproval): P
 }
 function withProfileLocks<T>(work: () => ProfileResult<T>, auditSwitch = false, background = false): ProfileResult<T> {
   const result = withLocks([...CREDENTIAL_LOCKS, CONFIG_LOCK], () => {
-    try { return work(); }
+    try {
+      // Mutation decisions must not depend on an earlier cached identity.
+      clearClaudeJsonCache();
+      return work();
+    }
     catch (error) {
       if (error instanceof UnreadableCredentialsError) {
         if (auditSwitch) auditAccountEvent("switch_preflight_failed", { stage: "preflight", code: "unreadable-source", reason: "transient_store" });
@@ -776,17 +780,29 @@ function switchProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
     }
     if (activeSlug) {
       auditAccountEvent("save_current_started", { stage: "outgoing_snapshot" });
-      const saved = updateProfileUnlocked(activeSlug, approval);
-      auditAccountEvent(saved.ok ? "save_current_completed" : "save_current_failed", saved.ok
-        ? { stage: "outgoing_snapshot", reason: "saved" }
-        : { stage: "outgoing_snapshot", code: saved.error });
-      if (!saved.ok) {
-        auditAccountEvent("switch_preflight_failed", { stage: "outgoing_snapshot", code: saved.error });
-        return saved;
-      }
-      if (activeSlug === slug) {
-        auditAccountEvent("switch_preflight_completed", { stage: "preflight", reason: "already_active" });
-        return saved;
+      const outgoing = readAccountSnapshot(slotDirectory(activeSlug));
+      const identity = extractIdentity(readClaudeJsonRaw() ?? "");
+      const keepKnownSnapshot = outgoing.credsRaw === liveCredentials?.raw &&
+        !sameIdentity(extractIdentity(outgoing.claudeJsonRaw), identity);
+      if (keepKnownSnapshot) {
+        // The complete current credential payload is already safely saved.
+        // Never overwrite its identity with another client's stale config.
+        // Continue through the transaction even when reselecting this account,
+        // so the user's explicit selection repairs the live identity file.
+        auditAccountEvent("save_current_completed", { stage: "outgoing_snapshot", reason: "saved_snapshot_kept" });
+      } else {
+        const saved = updateProfileUnlocked(activeSlug, approval);
+        auditAccountEvent(saved.ok ? "save_current_completed" : "save_current_failed", saved.ok
+          ? { stage: "outgoing_snapshot", reason: "saved" }
+          : { stage: "outgoing_snapshot", code: saved.error });
+        if (!saved.ok) {
+          auditAccountEvent("switch_preflight_failed", { stage: "outgoing_snapshot", code: saved.error });
+          return saved;
+        }
+        if (activeSlug === slug) {
+          auditAccountEvent("switch_preflight_completed", { stage: "preflight", reason: "already_active" });
+          return saved;
+        }
       }
     }
   } catch (error) {

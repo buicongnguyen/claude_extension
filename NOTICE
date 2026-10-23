@@ -29,3 +29,5 @@ This is not an upstream release or an official Anthropic product.
 Version 2.15.11 adds bounded background snapshot retries, saved-login freshness notices, and immediate account-switch UI updates.
 
 Version 2.15.12 displays local saved-login timestamps and elapsed ages in account warnings and the account picker.
+
+Version 2.15.13 detects local identity conflicts, protects saved account labels, invalidates identity caches on change, and repairs stale metadata on explicit selection with exact known credentials.

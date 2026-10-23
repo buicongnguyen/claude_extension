@@ -20,6 +20,7 @@ import { discoverModelsFromCli } from "./models";
 import { isUsageAggregateWarming } from "./projectStats";
 import * as os from "os";
 import { CLAUDE_DIR, SETTINGS_FILE, claudeSettingsPath } from "../../core/config";
+import { savedIdentityConflicts } from "./accountIdentity";
 import { readProfileListing, getActiveProfileSlug } from "./profiles";
 import { readQuotaHistory } from "./quotaHistory";
 import { readCredentials } from "./credentials";
@@ -375,6 +376,15 @@ export function parseAccountData(workspacePath?: string): AccountData {
   const activeSnapshot = rawProfiles.find(p => p.slug === activeProfileSlug);
   const liveHash = readCredentials()?.hash;
   const profileSnapshotChanged = !!activeSnapshot && !!liveHash && activeSnapshot.credentialsHash !== liveHash;
+  const profile = parseProfile();
+  const profileIdentityMismatch = savedIdentityConflicts(profile, activeSnapshot, liveHash);
+  if (profileIdentityMismatch) {
+    // Do not present a known conflicting local name as the signed-in identity.
+    profile.displayName = "Account identity needs verification";
+    profile.email = profile.accountUuid = profile.userID = "";
+    profile.organizationName = profile.organizationRole = "";
+    profile.accountCreatedAt = profile.subscriptionCreatedAt = "";
+  }
   // Attach each account's last-seen quota. Read once for the whole list
   // rather than per profile: it is a single small file, and the switcher
   // renders every row at the same instant anyway.
@@ -384,7 +394,7 @@ export function parseAccountData(workspacePath?: string): AccountData {
     lastQuota: (p.accountUuid && remembered[p.accountUuid]) || null,
   }));
   return {
-    profile: parseProfile(),
+    profile,
     usage: parseUsage(),
     settings: parseSettings(),
     permissions: parsePermissions(workspacePath),
@@ -403,6 +413,7 @@ export function parseAccountData(workspacePath?: string): AccountData {
     savedProfiles,
     profileStorageIssues: listing.issues,
     profileSnapshotChanged,
+    profileIdentityMismatch,
     activeProfileSlug,
     settingsSnapshots: listAllSnapshots(workspacePath),
     usageWarming: isUsageAggregateWarming(),

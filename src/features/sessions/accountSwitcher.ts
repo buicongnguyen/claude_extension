@@ -85,6 +85,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
   const savedProfiles = current.savedProfiles.map((p) => {
     if (
       p.slug === current.activeProfileSlug &&
+      !!p.accountUuid && p.accountUuid === current.profile.accountUuid &&
       current.profile.email &&
       current.profile.email !== p.email
     ) {

@@ -30,7 +30,7 @@ export const ACCOUNT_AUDIT_STAGES = [
 export const ACCOUNT_AUDIT_REASONS = [
   "user_cancelled", "save_not_completed", "local_switch_verified", "local_operation_succeeded", "restart_required", "unexpected_exception",
   "busy", "unavailable", "unsaved", "already_active", "saved", "missing_target", "unreadable", "identity_changed",
-  "invalid_journal", "unknown_live_state", "transient_store", "committed", "restored", "required", "backend_failed", "no_live_account",
+  "saved_snapshot_kept", "invalid_journal", "unknown_live_state", "transient_store", "committed", "restored", "required", "backend_failed", "no_live_account",
 ] as const;
 export const ACCOUNT_AUDIT_CODES = [
   "no-active-account", "unsaved-active-account", "slug-exists", "slot-exists", "slot-missing", "not-signed-in",

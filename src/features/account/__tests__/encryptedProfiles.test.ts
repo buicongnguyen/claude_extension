@@ -209,3 +209,50 @@ describe("background snapshot refresh", () => {
     expect(fs.readFileSync(saved, "utf8")).toBe(before);
   });
 });
+
+describe("known credentials with stale identity metadata", () => {
+  it.each(["account-1", "account-2"])("can explicitly select %s without saving the stale identity over the outgoing account", target => {
+    login("alice"); expect(saveProfile("Account 1").ok).toBe(true);
+    login("bob"); expect(saveProfile("Account 2").ok).toBe(true);
+    const staleConfig = fs.readFileSync(liveConfig, "utf8");
+    expect(switchProfile("account-1").ok).toBe(true);
+    const savedAlice = fs.readFileSync(path.join(fixture.vault, "account-1", SNAPSHOT_FILE), "utf8");
+    // An older Claude process rewrites its cached config after the switch.
+    fs.writeFileSync(liveConfig, staleConfig);
+    expect(getActiveProfileSlug()).toBe("account-1");
+    expect(switchProfile(target).ok).toBe(true);
+    const expected = target === "account-1" ? "alice" : "bob";
+    expect(JSON.parse(fs.readFileSync(liveConfig, "utf8")).oauthAccount.accountUuid).toBe(expected);
+    expect(JSON.parse(fs.readFileSync(liveCredentials, "utf8")).claudeAiOauth.accessToken).toBe("synthetic-access-" + expected);
+    expect(fs.readFileSync(path.join(fixture.vault, "account-1", SNAPSHOT_FILE), "utf8")).toBe(savedAlice);
+  });
+});
+
+it("does not use metadata repair to bypass protection for changed credentials", () => {
+  login("alice"); saveProfile("Account 1");
+  login("bob"); saveProfile("Account 2");
+  const staleConfig = fs.readFileSync(liveConfig, "utf8");
+  expect(switchProfile("account-1").ok).toBe(true);
+  fs.writeFileSync(liveConfig, staleConfig);
+  const changed = JSON.parse(fs.readFileSync(liveCredentials, "utf8"));
+  changed.claudeAiOauth.accessToken = "synthetic-unknown-access";
+  changed.claudeAiOauth.refreshToken = "synthetic-unknown-refresh";
+  fs.writeFileSync(liveCredentials, JSON.stringify(changed));
+  const before = ["account-1", "account-2"].map(slug => fs.readFileSync(path.join(fixture.vault, slug, SNAPSHOT_FILE), "utf8"));
+  expect(switchProfile("account-2").ok).toBe(false);
+  expect(["account-1", "account-2"].map(slug => fs.readFileSync(path.join(fixture.vault, slug, SNAPSHOT_FILE), "utf8"))).toEqual(before);
+  expect(fs.readFileSync(liveConfig, "utf8")).toBe(staleConfig);
+  expect(fs.readFileSync(liveCredentials, "utf8")).toBe(JSON.stringify(changed));
+});
+it("keeps both accounts correctly identified through repeated switches", () => {
+  login("alice"); saveProfile("Account 1");
+  login("bob"); saveProfile("Account 2");
+  for (let n = 0; n < 6; n++) {
+    const slug = n % 2 ? "account-2" : "account-1";
+    const identity = n % 2 ? "bob" : "alice";
+    expect(switchProfile(slug).ok).toBe(true);
+    expect(getActiveProfileSlug()).toBe(slug);
+    expect(JSON.parse(fs.readFileSync(liveConfig, "utf8")).oauthAccount.accountUuid).toBe(identity);
+    expect(readAccountSnapshot(path.join(fixture.vault, slug)).credsRaw).toBe(fs.readFileSync(liveCredentials, "utf8"));
+  }
+});

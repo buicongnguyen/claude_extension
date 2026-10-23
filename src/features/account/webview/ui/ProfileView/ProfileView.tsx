@@ -45,6 +45,16 @@ export function ProfileView({ data, api }: ProfileViewProps) {
               </div>
             </div>
           ) : null}
+          {data.profileIdentityMismatch ? (
+            <div class="acct-banner" role="alert">
+              <Icon name="circle-alert" size={14} />
+              <div class="acct-banner-text">
+                <strong>Claude's local account details disagree with the saved login.</strong>
+                <span>Current credentials match saved profile {activeProfile?.label || activeProfile?.email || "(unknown)"}. Close running Claude chats and terminals, then select that profile again to restore consistent account details. This does not verify whether Claude accepts its token.</span>
+              </div>
+              <Button variant="secondary" onClick={() => api.openAccountSwitcher()}>Review account identity</Button>
+            </div>
+          ) : null}
           {data.profileSnapshotChanged ? (
             <div class="acct-banner" role="status">
               <Icon name="circle-alert" size={14} />

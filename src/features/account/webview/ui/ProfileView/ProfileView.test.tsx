@@ -244,3 +244,14 @@ describe("saved login freshness", () => {
     expect(screen.queryByText("Saved login reminder (6 hours)")).toBeNull();
   });
 });
+
+it("offers explicit identity review without automatically changing the login", () => {
+  _resetAccountState();
+  const api = stubApi();
+  render(h(ProfileView, { data: makeData({}, { profileIdentityMismatch: true }), api }));
+  expect(screen.getByRole("alert").textContent).toContain("local account details disagree");
+  expect(api.openAccountSwitcher).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Review account identity" }));
+  expect(api.openAccountSwitcher).toHaveBeenCalledTimes(1);
+  expect(api.launchSlash).not.toHaveBeenCalled();
+});

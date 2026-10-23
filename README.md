@@ -1,6 +1,6 @@
 # Claude Code Manager Personal
 
-A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.12**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
+A personal fork of [Claude Code Manager](https://github.com/vishalguptax/claude-code-manager), based on **2.15.1**, commit `c9a8181c8d2ef5ba25199517c2bde6ff04ef9531`. This fork is **2.15.13**, extension ID `local-personal.claude-manager-personal`. It is not an official Anthropic extension or a release by the upstream maintainer.
 
 It keeps the upstream session browser, account picker, usage display, MCP configuration and other tools. The changes focus on saving two accounts and switching manually between them.
 
@@ -22,6 +22,7 @@ Version 2.15.10 starts in **Account-focused mode** by default. It opens Account 
 
 ## Changes
 
+- Version 2.15.13 detects conflicting local account details, prevents stale names from replacing saved account labels, and safely repairs identity metadata on an explicit account selection when the live credentials exactly match an existing snapshot. See [account identity fixes](docs/ACCOUNT-IDENTITY-2.15.13.md).
 - Version 2.15.12 shows each account's last saved-login date, local time zone, and elapsed age in the warnings and account picker. These are snapshot times, not exact sign-in times.
 - Version 2.15.11 makes background login snapshot updates yield to Claude, reports unsaved login changes, adds six-hour reminders, and refreshes the switch display immediately. Rejected logins still require signing in again. See [account refresh fixes](docs/ACCOUNT-REFRESH-2.15.11.md).
 - Version 2.15.10 fixes large-history freezes: transcript parsing and search run in a memory-limited worker, oversized records are skipped, and previews retain bounded pages. See [performance fixes](docs/PERFORMANCE-2.15.10.md).
@@ -51,11 +52,11 @@ Download the installer from the [download page](https://buicongnguyen.github.io/
 1. Disable or uninstall the original **Claude Code Manager** (`vishalguptax.claude-manager`). Both versions share command/view IDs.
 2. Keep Anthropic's official **Claude Code** extension enabled.
 3. Run **Extensions: Install from VSIX…** in VS Code.
-4. Select the downloaded `claude-manager-personal-2.15.12.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
+4. Select the downloaded `claude-manager-personal-2.15.13.vsix` and reload the window. The source copy is in `site/downloads/`; a local build writes to `dist/`.
 
 This installer is distributed through GitHub and GitHub Pages, not the Marketplace. Building does not install it or change your accounts. On another machine, sign in to Claude and save each account again. Account snapshots, vault keys and local settings are not bundled or synchronized.
 
-To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.12.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
+To verify the installer in PowerShell, use `Get-FileHash .\claude-manager-personal-2.15.13.vsix -Algorithm SHA256` and compare with [SHA256SUMS](site/downloads/SHA256SUMS).
 
 ## Your two-account workflow
 
