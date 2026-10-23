@@ -220,3 +220,24 @@ describe("saved account storage warning", () => {
     expect(api.openAccountSwitcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("saved login freshness", () => {
+  beforeEach(() => _resetAccountState());
+  it("offers review without automatically signing in or switching", () => {
+    const api = stubApi();
+    render(h(ProfileView, { data: makeData({}, { profileSnapshotChanged: true }), api }));
+    expect(screen.getByRole("status").textContent).toContain("differs from the current login");
+    expect(api.openAccountSwitcher).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review saved accounts" }));
+    expect(api.openAccountSwitcher).toHaveBeenCalledTimes(1);
+    expect(api.launchSlash).not.toHaveBeenCalled();
+  });
+  it("shows the six-hour reminder for inactive profiles only", () => {
+    const profile = { slug: "other", label: "Other account", email: "", organizationName: "", subscriptionType: "", savedAt: "2020-01-01T00:00:00Z", tokenExpiresAt: 0, credentialsHash: "", userID: "", accountUuid: "" };
+    const view = render(h(ProfileView, { data: makeData({}, { savedProfiles: [profile] }), api: stubApi() }));
+    expect(screen.getByRole("status").textContent).toContain("Other account");
+    expect(screen.getByRole("status").textContent).toContain("does not mean the login has expired");
+    view.rerender(h(ProfileView, { data: makeData({}, { savedProfiles: [profile], activeProfileSlug: "other" }), api: stubApi() }));
+    expect(screen.queryByText("Saved login reminder (6 hours)")).toBeNull();
+  });
+});

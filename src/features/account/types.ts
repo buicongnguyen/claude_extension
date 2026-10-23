@@ -430,6 +430,8 @@ export interface AccountData {
    * or when no active account exists.
    */
   activeProfileSlug: string | null;
+  /** The current credentials differ from the saved snapshot; identity may need confirmation. */
+  profileSnapshotChanged?: boolean;
   /**
    * Settings.json snapshots taken before each `writeSettingsValue` /
    * permissions mutation. Newest first. Capped per scope by

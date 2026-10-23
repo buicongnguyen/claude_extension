@@ -12,7 +12,7 @@ function profile(over: Partial<SavedProfile> = {}): SavedProfile {
     email: "alex@example.dev",
     organizationName: "Acme",
     subscriptionType: "max",
-    savedAt: "2026-09-01T00:00:00.000Z",
+    savedAt: "2026-09-14T11:00:00.000Z",
     tokenExpiresAt: 0,
     credentialsHash: "hash",
     userID: "uid",
@@ -89,4 +89,14 @@ describe("profileRowText", () => {
       "Saved profile",
     );
   });
+});
+
+it("marks an old inactive login without hiding its identity or quota", () => {
+  const row = profileRowText({ ...profile({ savedAt: "2026-09-14T06:00:00Z" }), lastQuota: seen(3, 62) }, { isActive: false, isDuplicate: false }, NOW);
+  expect(row.description).toBe("62% weekly · 3h ago · Review saved login (6h+)");
+  expect(row.detail).toContain("alex@example.dev");
+});
+it("warns when the active saved login differs", () => {
+  expect(profileRowText(profile(), { isActive: true, isDuplicate: false, needsUpdate: true }, NOW).description).toBe("Active · Saved login needs updating");
+  expect(profileRowText(profile(), { isActive: false, isDuplicate: false, needsUpdate: true }, NOW).description).toBe("");
 });

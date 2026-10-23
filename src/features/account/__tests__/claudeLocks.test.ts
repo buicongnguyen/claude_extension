@@ -242,3 +242,12 @@ describe("describeLockFailure", () => {
     expect(describeLockFailure({ reason: "busy", lock: "/x" })).toContain("Try again");
   });
 });
+
+it("background acquisition leaves even an aged lock to Claude without waiting", () => {
+  const a = lock("background.lock"); fs.mkdirSync(a.dir);
+  const old = new Date(Date.now() - 120_000); fs.utimesSync(a.dir, old, old);
+  const work = vi.fn();
+  expect(withLocks([a], work, { background: true })).toMatchObject({ ok: false, failure: { reason: "busy" } });
+  expect(work).not.toHaveBeenCalled();
+  expect(fs.existsSync(a.dir)).toBe(true);
+});

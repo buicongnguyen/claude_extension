@@ -152,11 +152,13 @@ describe("saved switch diagnostics", () => {
     state.warning.mockResolvedValue("Switch");
     let finish!: (choice: string | undefined) => void;
     state.info.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    await openAccountSwitcher(ctx);
+    await openAccountSwitcher({ ...ctx, getWebview: () => ({} as any) });
     state.picker.selectedItems = [state.picker.items.find((item: any) => item.slug === "alice")];
     const pending = state.accept!();
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     expect(state.audit.at(-1)).toMatchObject({ event: "operation_completed", fields: { reason: "local_operation_succeeded" } });
+    expect(state.push).toHaveBeenCalledTimes(1);
+    expect(state.info.mock.calls[0][0]).toContain("Claude still needs to accept this login");
     finish("Reload window");
     state.command.mockImplementation(async () => {
       expect(state.audit.at(-1)).toMatchObject({ event: "reload_requested" });

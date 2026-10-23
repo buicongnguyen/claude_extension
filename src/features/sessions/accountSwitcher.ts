@@ -17,6 +17,7 @@ import {
 } from "../account/profiles";
 import { updateProfileWithConfirmation as updateProfileSnapshot, switchProfileWithConfirmation as switchProfileSnapshot } from "./profileActions";
 import type { SavedProfile } from "../account/profiles";
+import { savedLoginReminder } from "../account/savedLoginReminder";
 import { describeProfileQuota } from "../account/profileQuota";
 import { getWorkspace } from "../../extension/workspace";
 import { launchClaudeWithInput, createTerminal } from "../../extension/terminal";
@@ -43,18 +44,19 @@ export interface ProfileRowText {
  */
 export function profileRowText(
   profile: SavedProfile & { lastQuota?: Parameters<typeof describeProfileQuota>[0] },
-  flags: { isActive: boolean; isDuplicate: boolean },
+  flags: { isActive: boolean; isDuplicate: boolean; needsUpdate?: boolean },
   now: number = Date.now(),
 ): ProfileRowText {
   const status = flags.isActive ? "Active" : flags.isDuplicate ? "Duplicate" : "";
   const quota = describeProfileQuota(profile.lastQuota ?? null, now);
+  const reminder = flags.isActive && flags.needsUpdate ? "Saved login needs updating" : savedLoginReminder(profile.savedAt, flags.isActive, now);
   const meta: string[] = [];
   if (profile.email) meta.push(profile.email);
   if (profile.subscriptionType) meta.push(profile.subscriptionType);
   if (profile.organizationName) meta.push(profile.organizationName);
   if (flags.isDuplicate) meta.push("duplicate — remove if unused");
   return {
-    description: [status, quota].filter(Boolean).join(" · "),
+    description: [status, quota, reminder].filter(Boolean).join(" · "),
     // Every row keeps a `detail` so native row heights match.
     detail: meta.join(" · ") || "Saved profile",
   };
@@ -149,7 +151,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
   for (const p of sortedProfiles) {
     const isActive = p.slug === activeSlug;
     const isDuplicate = duplicateSlugs.has(p.slug);
-    const { description, detail } = profileRowText(p, { isActive, isDuplicate });
+    const { description, detail } = profileRowText(p, { isActive, isDuplicate, needsUpdate: current.profileSnapshotChanged });
     items.push({
       action: "switch",
       slug: p.slug,
@@ -320,10 +322,12 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
             localOperationSucceeded = true;
             outcomeRecorded = true;
             auditAccountEvent("operation_completed", { stage, reason: "local_operation_succeeded" });
+            stage = "refresh_ui";
+            pushAccountUpdate();
             stage = "notification";
             const reload = await vscode.window.showInformationMessage(
-              "Switched to " + (result.data.email || result.data.label) + ". " +
-                "Restart Claude terminals and reload VS Code, then verify the account in Claude's /status.",
+              "Saved login restored for " + (result.data.email || result.data.label) + ". " +
+                "Claude still needs to accept this login. Restart Claude terminals and reload VS Code. If Claude asks you to sign in, log in again, verify the account, then update its saved snapshot.",
               "Reload window",
             );
             stage = "reload";

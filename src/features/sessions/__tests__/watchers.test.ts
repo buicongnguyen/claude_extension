@@ -55,9 +55,10 @@ vi.mock("../../account/quota", () => ({
   readQuota: () => ({ ok: false }),
 }));
 vi.mock("../../account/profiles", () => ({
-  syncActiveProfile: () => {},
+  syncActiveProfile: vi.fn(() => null),
 }));
 
+import { syncActiveProfile } from "../../account/profiles";
 import { createWatchers, type WatcherContext } from "../watchers";
 
 type Handler = (uri: vscode.Uri) => void;
@@ -99,6 +100,7 @@ function makeCtx(): WatcherContext {
 beforeEach(() => {
   vi.useFakeTimers();
   __parseAccountCalls = 0;
+  vi.mocked(syncActiveProfile).mockReset().mockReturnValue(null);
   captured = [];
   posted = [];
   reloadedFeatures = [];
@@ -279,5 +281,42 @@ describe("account-focused watcher fleet", () => {
       expect(globs).not.toContain("*.json");
       expect(globs).not.toContain("**/SKILL.md");
     } finally { disposable.dispose(); setAccountFocusedMode(false); }
+  });
+});
+
+describe("background login snapshot retries", () => {
+  function fire(name: string) {
+    const w = captured.find(w => w.glob.includes(".credentials.json"))!;
+    w.handlers[0]({ fsPath: path.join(w.base, name) } as vscode.Uri);
+  }
+  it("does not sync credentials on stats/settings events", async () => {
+    const d = createWatchers(makeCtx());
+    fire("stats-cache.json"); fire("settings.json");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(syncActiveProfile).not.toHaveBeenCalled();
+    d.dispose();
+  });
+  it("retries after a busy credential store and stops when saved", async () => {
+    vi.mocked(syncActiveProfile).mockReturnValueOnce(null).mockReturnValue("account-1");
+    const d = createWatchers(makeCtx()); fire(".credentials.json");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(syncActiveProfile).toHaveBeenCalledTimes(2);
+    d.dispose();
+  });
+  it("limits retries for an ambiguous or unavailable login", async () => {
+    const d = createWatchers(makeCtx()); fire(".credentials.json");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(syncActiveProfile).toHaveBeenCalledTimes(3);
+    d.dispose();
+  });
+  it.each([false, true])("cancels pending retries on disposal (account mode %s)", async mode => {
+    setAccountFocusedMode(mode);
+    const d = createWatchers(makeCtx());
+    try {
+      fire(".credentials.json"); await vi.advanceTimersByTimeAsync(200);
+      expect(syncActiveProfile).toHaveBeenCalledTimes(1);
+      d.dispose(); await vi.advanceTimersByTimeAsync(60_000);
+      expect(syncActiveProfile).toHaveBeenCalledTimes(1);
+    } finally { d.dispose(); setAccountFocusedMode(false); }
   });
 });

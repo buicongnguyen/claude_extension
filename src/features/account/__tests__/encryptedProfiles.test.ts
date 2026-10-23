@@ -13,7 +13,7 @@ vi.mock("fs", async (importOriginal) => ({ ...(await importOriginal<typeof impor
 vi.mock("os", async (importOriginal) => ({ ...(await importOriginal<typeof import("os")>()), homedir: () => fixture.home }));
 vi.mock("../../../core/config", () => ({ CLAUDE_DIR: fixture.claude }));
 import { closeProfileVault, initializeProfileVault, readProfileFile } from "../profileVault";
-import { getActiveProfileSlug, listProfiles, readProfileListing, removeProfile, saveProfile, switchProfile } from "../profiles";
+import { getActiveProfileSlug, listProfiles, readProfileListing, removeProfile, saveProfile, switchProfile, syncActiveProfile } from "../profiles";
 
 import { readAccountSnapshot, SNAPSHOT_FILE } from "../accountSnapshot";
 
@@ -170,5 +170,42 @@ describe("saved-profile listing diagnostics", () => {
     });
     expect(readProfileListing()).toEqual({ profiles: [], issues: [] });
     expect(listProfiles()).toEqual([]);
+  });
+});
+
+describe("background snapshot refresh", () => {
+  it("yields to Claude's lock and saves a later rotation without touching the live login", () => {
+    login("alice"); expect(saveProfile("Account 1").ok).toBe(true);
+    const saved = path.join(fixture.vault, "account-1", SNAPSHOT_FILE);
+    const before = fs.readFileSync(saved, "utf8");
+    const creds = JSON.parse(fs.readFileSync(liveCredentials, "utf8"));
+    creds.claudeAiOauth.accessToken = "synthetic-rotated-access";
+    fs.writeFileSync(liveCredentials, JSON.stringify(creds));
+    const liveBefore = fs.readFileSync(liveCredentials, "utf8");
+    const lock = path.join(fixture.claude, ".oauth_refresh.lock");
+    fs.mkdirSync(lock);
+    const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => { throw Error("background lock wait"); });
+    expect(syncActiveProfile()).toBeNull();
+    expect(wait).not.toHaveBeenCalled();
+    expect(fs.readFileSync(saved, "utf8")).toBe(before);
+    expect(fs.existsSync(lock)).toBe(true);
+    wait.mockRestore();
+    fs.rmdirSync(lock);
+    expect(syncActiveProfile()).toBe("account-1");
+    expect(readAccountSnapshot(path.join(fixture.vault, "account-1")).credsRaw).toBe(liveBefore);
+    expect(fs.readFileSync(liveCredentials, "utf8")).toBe(liveBefore);
+  });
+  it("does not acquire locks or replace a saved account for an ambiguous full rotation", () => {
+    login("alice"); saveProfile("Account 1");
+    const saved = path.join(fixture.vault, "account-1", SNAPSHOT_FILE);
+    const before = fs.readFileSync(saved, "utf8");
+    const creds = JSON.parse(fs.readFileSync(liveCredentials, "utf8"));
+    creds.claudeAiOauth.accessToken = "synthetic-other-access";
+    creds.claudeAiOauth.refreshToken = "synthetic-other-refresh";
+    fs.writeFileSync(liveCredentials, JSON.stringify(creds));
+    const mkdir = vi.spyOn(fs, "mkdirSync");
+    expect(syncActiveProfile()).toBeNull();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(fs.readFileSync(saved, "utf8")).toBe(before);
   });
 });

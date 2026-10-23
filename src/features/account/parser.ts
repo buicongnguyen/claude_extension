@@ -372,6 +372,9 @@ export function parseAccountData(workspacePath?: string): AccountData {
   const listing = readProfileListing();
   const rawProfiles = listing.profiles;
   const activeProfileSlug = getActiveProfileSlug(rawProfiles);
+  const activeSnapshot = rawProfiles.find(p => p.slug === activeProfileSlug);
+  const liveHash = readCredentials()?.hash;
+  const profileSnapshotChanged = !!activeSnapshot && !!liveHash && activeSnapshot.credentialsHash !== liveHash;
   // Attach each account's last-seen quota. Read once for the whole list
   // rather than per profile: it is a single small file, and the switcher
   // renders every row at the same instant anyway.
@@ -399,6 +402,7 @@ export function parseAccountData(workspacePath?: string): AccountData {
     activeModel: resolveActiveModel(readStatuslineCache(), Date.now()) || undefined,
     savedProfiles,
     profileStorageIssues: listing.issues,
+    profileSnapshotChanged,
     activeProfileSlug,
     settingsSnapshots: listAllSnapshots(workspacePath),
     usageWarming: isUsageAggregateWarming(),

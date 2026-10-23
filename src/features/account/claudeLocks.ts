@@ -29,7 +29,7 @@ type AcquireResult =
   | { kind: "taken"; owned: OwnedLock }
   | { kind: "held" }
   | { kind: "error"; detail: string };
-function tryAcquire(spec: LockSpec): AcquireResult {
+function tryAcquire(spec: LockSpec, reclaimStale = true): AcquireResult {
   const take = (): AcquireResult => {
     fs.mkdirSync(spec.dir, { mode: 0o700 });
     const identity = lockIdentity(spec.dir);
@@ -42,6 +42,7 @@ function tryAcquire(spec: LockSpec): AcquireResult {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST")
       return { kind: "error", detail: (error as Error).message };
   }
+  if (!reclaimStale) return { kind: "held" };
   const identity = lockIdentity(spec.dir);
   if (!identity) return { kind: "held" };
   try {
@@ -59,10 +60,12 @@ function tryAcquire(spec: LockSpec): AcquireResult {
   }
 }
 
-/** The callback is synchronous; a separate worker keeps all held locks fresh. */
+/** The callback is synchronous; a worker keeps held locks fresh. Background
+ * acquisition never waits for or reclaims another holder's lock. */
 export function withLocks<T>(
   specs: readonly LockSpec[],
   work: () => T,
+  options: { background?: boolean } = {},
 ): { ok: true; value: T } | { ok: false; failure: LockFailure } {
   const held: OwnedLock[] = [];
   let heartbeat: LockHeartbeat | undefined;
@@ -86,16 +89,16 @@ export function withLocks<T>(
     return { ok: false, failure: { reason: "unavailable", lock, detail } };
   };
   for (const spec of specs) {
-    const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
+    const deadline = Date.now() + (options.background ? 0 : ACQUIRE_TIMEOUT_MS);
     let owned: OwnedLock | undefined;
     for (;;) {
-      const result = tryAcquire(spec);
+      const result = tryAcquire(spec, !options.background);
       if (result.kind === "taken") {
         owned = result.owned;
         break;
       }
       if (result.kind === "error") return unavailable(spec.dir, result.detail);
-      if (Date.now() >= deadline) break;
+      if (options.background || Date.now() >= deadline) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_INTERVAL_MS);
     }
     if (!owned) {

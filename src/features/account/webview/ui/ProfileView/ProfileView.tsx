@@ -10,6 +10,8 @@
  * row.
  */
 
+import { savedLoginReminder } from "../../../savedLoginReminder";
+import { now } from "../../../../../webview/shared/model";
 import { cx } from "../../../../../webview/shared/lib";
 import { Button, EmptyState, Icon, SectionHeader } from "../../../../../webview/shared/ui";
 import type { AccountData } from "../../../types";
@@ -25,6 +27,9 @@ export interface ProfileViewProps {
 
 export function ProfileView({ data, api }: ProfileViewProps) {
   const collapsed = isSectionCollapsed("profile");
+  const olderProfiles = data.savedProfiles.filter(p =>
+    savedLoginReminder(p.savedAt, p.slug === data.activeProfileSlug, now.value),
+  );
   return (
     <section class="section">
       <SectionHeader id="profile" title="Profile" collapsed={collapsed} onToggle={toggleSection} />
@@ -36,6 +41,27 @@ export function ProfileView({ data, api }: ProfileViewProps) {
               <div class="acct-banner-text">
                 <strong>A saved account could not be read.</strong>
                 <span>Its saved files are still stored. Open Switch account for details. You may need the matching VS Code secret storage or a fresh login.</span>
+              </div>
+            </div>
+          ) : null}
+          {data.profileSnapshotChanged ? (
+            <div class="acct-banner" role="status">
+              <Icon name="circle-alert" size={14} />
+              <div class="acct-banner-text">
+                <strong>Your saved login differs from the current login.</strong>
+                <span>Open saved accounts and use Update snapshot on the active account. Verify the account in Claude before confirming; the local name may be outdated.</span>
+              </div>
+              <Button variant="secondary" onClick={() => api.openAccountSwitcher()}>
+                Review saved accounts
+              </Button>
+            </div>
+          ) : null}
+          {olderProfiles.length ? (
+            <div class="acct-banner" role="status">
+              <Icon name="circle-alert" size={14} />
+              <div class="acct-banner-text">
+                <strong>Saved login reminder (6 hours)</strong>
+                <span>{olderProfiles.map(p => p.label || p.email || "Saved account").join(", ")}: last saved at least six hours ago. When switching, sign in again if Claude requests it, verify the account, then update its snapshot. This reminder does not mean the login has expired.</span>
               </div>
             </div>
           ) : null}

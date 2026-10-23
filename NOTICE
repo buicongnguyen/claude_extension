@@ -25,3 +25,5 @@ privacy-filtered persistent account switch logs with bounded retention and a log
 Additional October 2026 performance fixes: bounded line decoding, background
 transcript parsing/search with a limited worker heap, and streaming preview pages.
 This is not an upstream release or an official Anthropic product.
+
+Version 2.15.11 adds bounded background snapshot retries, saved-login freshness notices, and immediate account-switch UI updates.

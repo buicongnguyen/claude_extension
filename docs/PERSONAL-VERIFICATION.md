@@ -1,5 +1,13 @@
 # Personal fork verification
 
+## Version 2.15.11 — account refresh and switch feedback
+
+- Full suite: **4,152 passed / 19 failed**, 4,171 tests across 310 files. The 19 failure identities exactly match the known 2.15.10 Windows baseline; no new failures. [Validation](VALIDATION-2.15.11.json).
+- Sixteen added regressions cover busy/stale locks, saving a later rotation without live-login writes, preservation of ambiguous rotations, limited retries and disposal in both modes, account-data warnings, picker reminders, and warning actions. The existing pending-notification test now also requires an immediate account display update.
+- TypeScript, configured Biome (131 files), and production builds pass. Final parser/lock tests pass after review. Tests use synthetic credentials and do not authenticate with Claude.
+- [Changes and recovery guidance](ACCOUNT-REFRESH-2.15.11.md). A saved token rejected by Claude still needs a fresh sign-in; the earlier guard remains in place to prevent cross-account snapshot overwrites.
+
+
 ## Version 2.15.10 — account-focused mode and large-history safeguards
 
 The default now opens Account and skips session/history watchers, process polling, search indexing, CLI model scans and detailed transcript usage aggregation. Profile switching, saved-account logs and local quota remain available; detailed usage charts are hidden. Disable Claude Manager: Account Focused Mode and reload for optional full history features.

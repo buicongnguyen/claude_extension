@@ -678,6 +678,7 @@ function updateProfileUnlocked(slug: string, approval?: ProfileUpdateApproval): 
 /**
  * Best-effort watcher sync. Unknown token lineage is left untouched;
  * a manual update/switch can request confirmation for a full rotation.
+ * Busy locks are left to Claude; the watcher schedules bounded retries.
  */
 export function syncActiveProfile(): string | null {
   if (hasPendingSwitch()) return null;
@@ -688,7 +689,13 @@ export function syncActiveProfile(): string | null {
   const slotCreds = path.join(slotDirectory(slug), ".credentials.json");
   const live = readCredentials();
   if (live && hashFile(slotCreds) === live.hash) return slug;
-  const result = updateProfile(slug);
+  // Ambiguous rotations need a user decision, not repeated lock acquisition
+  // on every config write. The locked update rechecks all inputs before saving.
+  try {
+    const saved = readAccountSnapshot(slotDirectory(slug));
+    if (!live || !sameTokenLineage(saved.credsRaw, live.raw)) return null;
+  } catch { return null; }
+  const result = withProfileLocks(() => updateProfileUnlocked(slug), false, true);
   return result.ok ? slug : null;
 }
 
@@ -712,7 +719,7 @@ export function switchProfile(slug: string, approval?: ProfileUpdateApproval): P
   // Personal fork: serialize swaps with Claude's refresh/config writers.
   return withProfileLocks(() => switchProfileUnlocked(slug, approval), true);
 }
-function withProfileLocks<T>(work: () => ProfileResult<T>, auditSwitch = false): ProfileResult<T> {
+function withProfileLocks<T>(work: () => ProfileResult<T>, auditSwitch = false, background = false): ProfileResult<T> {
   const result = withLocks([...CREDENTIAL_LOCKS, CONFIG_LOCK], () => {
     try { return work(); }
     catch (error) {
@@ -722,7 +729,7 @@ function withProfileLocks<T>(work: () => ProfileResult<T>, auditSwitch = false):
       }
       throw error;
     }
-  });
+  }, { background });
   if (!result.ok && auditSwitch) auditAccountEvent("locks_failed", { stage: "locks", code: "copy-failed", reason: result.failure.reason });
   return result.ok ? result.value : { ok: false, error: "copy-failed", detail: describeLockFailure(result.failure) };
 }

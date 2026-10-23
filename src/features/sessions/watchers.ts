@@ -103,6 +103,25 @@ function sessionIdFromTranscriptPath(filePath: string): string | null {
 export function createWatchers(ctx: WatcherContext): vscode.Disposable {
   const watchers: vscode.FileSystemWatcher[] = [];
   let accountReparseTimer: NodeJS.Timeout | undefined;
+  let profileSyncTimer: NodeJS.Timeout | undefined;
+  let profileSyncAttempts = 0;
+  // Yield to Claude's refresh locks, then retry a bounded number of times.
+  // No live credentials are written and no window is reloaded by this path.
+  const tryProfileSync = (): void => {
+    profileSyncTimer = undefined;
+    profileSyncAttempts++;
+    let synced: string | null = null;
+    try { synced = syncActiveProfileSnapshot(); }
+    catch { /* A temporary credential-store failure must not break the watcher. */ }
+    if (!synced && profileSyncAttempts < 3) {
+      profileSyncTimer = setTimeout(tryProfileSync, profileSyncAttempts * 1000);
+    }
+    const wv = ctx.getWebview();
+    if (wv) {
+      try { postAccountData(wv, parseAccountData(getWorkspace() || undefined), true); }
+      catch { /* The next account event can refresh the display. */ }
+    }
+  };
   let sessionsReparseTimer: NodeJS.Timeout | undefined;
   let sessionsBurstStartedAt = 0;
   let quotaCacheTimer: NodeJS.Timeout | undefined;
@@ -159,19 +178,16 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
     w.onDidDelete(handler);
   };
 
-  const onAccountChange = (): void => {
+  const onAccountChange = (uri: vscode.Uri): void => {
+    const name = path.basename(uri.fsPath);
+    if ((name === ".credentials.json" || name === ".claude.json") && !profileSyncTimer) {
+      profileSyncAttempts = 0;
+      profileSyncTimer = setTimeout(tryProfileSync, 200);
+    }
     if (accountReparseTimer) clearTimeout(accountReparseTimer);
     accountReparseTimer = setTimeout(() => {
       const wv = ctx.getWebview();
       try {
-        // Sync only token changes tied to the same saved login. A complete
-        // opaque-token replacement needs manual confirmation, so a login
-        // transition can never silently overwrite the previous account.
-        try {
-          syncActiveProfileSnapshot();
-        } catch (err) {
-          console.warn("[claude-manager] sync active profile failed:", err);
-        }
         const ws = getWorkspace();
         const data = parseAccountData(ws || undefined);
         // Identity-change detection: when the live userID shifts
@@ -265,6 +281,7 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
 
   // Account-focused mode needs only login/settings/quota watchers.
   if (isAccountFocusedMode()) return { dispose() {
+    if (profileSyncTimer) clearTimeout(profileSyncTimer);
     if (accountReparseTimer) clearTimeout(accountReparseTimer);
     if (quotaCacheTimer) clearTimeout(quotaCacheTimer);
     for (const watcher of watchers) watcher.dispose();
@@ -488,6 +505,7 @@ export function createWatchers(ctx: WatcherContext): vscode.Disposable {
 
   return {
     dispose(): void {
+      if (profileSyncTimer) clearTimeout(profileSyncTimer);
       if (accountReparseTimer) clearTimeout(accountReparseTimer);
       accountReparseTimer = undefined;
       if (sessionsReparseTimer) clearTimeout(sessionsReparseTimer);
