@@ -1,5 +1,14 @@
 # Personal fork verification
 
+## Version 2.15.12 — saved-login timestamps
+
+Account warnings list each affected account on its own line with the last saved snapshot date, local time zone, and elapsed age. The account picker includes this information for every profile, including the active account. An active snapshot-change warning also includes its last saved time. These are save/update times, not independently observed sign-in times. Invalid or absent times show unknown; future times flag a clock discrepancy.
+
+- Focused verification: **47 tests passed across four files** covering reminder timing, timestamp/age formatting, warning rendering and account picker/switch behavior. TypeScript and configured Biome (131 files) passed.
+- Production extension/webview/CSS builds and package runtime checks passed. No credential handling or switching behavior changed in this display-only update.
+- The full suite was not rerun for this display-only change; the last full baseline is recorded under 2.15.11 below.
+
+
 ## Version 2.15.11 — account refresh and switch feedback
 
 - Full suite: **4,152 passed / 19 failed**, 4,171 tests across 310 files. The 19 failure identities exactly match the known 2.15.10 Windows baseline; no new failures. [Validation](VALIDATION-2.15.11.json).

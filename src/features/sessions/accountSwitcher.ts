@@ -17,7 +17,7 @@ import {
 } from "../account/profiles";
 import { updateProfileWithConfirmation as updateProfileSnapshot, switchProfileWithConfirmation as switchProfileSnapshot } from "./profileActions";
 import type { SavedProfile } from "../account/profiles";
-import { savedLoginReminder } from "../account/savedLoginReminder";
+import { savedLoginReminder, formatSavedLoginTime } from "../account/savedLoginReminder";
 import { describeProfileQuota } from "../account/profileQuota";
 import { getWorkspace } from "../../extension/workspace";
 import { launchClaudeWithInput, createTerminal } from "../../extension/terminal";
@@ -55,6 +55,7 @@ export function profileRowText(
   if (profile.subscriptionType) meta.push(profile.subscriptionType);
   if (profile.organizationName) meta.push(profile.organizationName);
   if (flags.isDuplicate) meta.push("duplicate — remove if unused");
+  meta.push(formatSavedLoginTime(profile.savedAt, now));
   return {
     description: [status, quota, reminder].filter(Boolean).join(" · "),
     // Every row keeps a `detail` so native row heights match.

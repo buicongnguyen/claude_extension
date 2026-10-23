@@ -236,6 +236,9 @@ describe("saved login freshness", () => {
     const profile = { slug: "other", label: "Other account", email: "", organizationName: "", subscriptionType: "", savedAt: "2020-01-01T00:00:00Z", tokenExpiresAt: 0, credentialsHash: "", userID: "", accountUuid: "" };
     const view = render(h(ProfileView, { data: makeData({}, { savedProfiles: [profile] }), api: stubApi() }));
     expect(screen.getByRole("status").textContent).toContain("Other account");
+    expect(screen.getByRole("status").textContent).toContain("Last saved:");
+    expect(screen.getByRole("status").textContent).toContain("2020");
+    expect(screen.getByRole("status").textContent).toContain("not its exact sign-in time");
     expect(screen.getByRole("status").textContent).toContain("does not mean the login has expired");
     view.rerender(h(ProfileView, { data: makeData({}, { savedProfiles: [profile], activeProfileSlug: "other" }), api: stubApi() }));
     expect(screen.queryByText("Saved login reminder (6 hours)")).toBeNull();

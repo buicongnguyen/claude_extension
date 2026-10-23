@@ -27,3 +27,5 @@ transcript parsing/search with a limited worker heap, and streaming preview page
 This is not an upstream release or an official Anthropic product.
 
 Version 2.15.11 adds bounded background snapshot retries, saved-login freshness notices, and immediate account-switch UI updates.
+
+Version 2.15.12 displays local saved-login timestamps and elapsed ages in account warnings and the account picker.

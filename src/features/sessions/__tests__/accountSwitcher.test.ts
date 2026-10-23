@@ -72,9 +72,9 @@ describe("profileRowText", () => {
   });
 
   it("lines the identity up in the detail row", () => {
-    expect(profileRowText(profile(), { isActive: false, isDuplicate: false }, NOW).detail).toBe(
-      "alex@example.dev · max · Acme",
-    );
+    const detail = profileRowText(profile(), { isActive: false, isDuplicate: false }, NOW).detail;
+    expect(detail).toContain("alex@example.dev · max · Acme · Last saved:");
+    expect(detail).toContain("(1h 0m ago)");
   });
 
   it("flags a duplicate in both lines", () => {
@@ -84,9 +84,9 @@ describe("profileRowText", () => {
   });
 
   it("always gives a detail so row heights match", () => {
-    const bare = profile({ email: "", organizationName: "", subscriptionType: "" });
+    const bare = profile({ email: "", organizationName: "", subscriptionType: "", savedAt: "" });
     expect(profileRowText(bare, { isActive: false, isDuplicate: false }, NOW).detail).toBe(
-      "Saved profile",
+      "Last saved: unknown",
     );
   });
 });

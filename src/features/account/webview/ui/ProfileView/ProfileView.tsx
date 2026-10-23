@@ -10,7 +10,7 @@
  * row.
  */
 
-import { savedLoginReminder } from "../../../savedLoginReminder";
+import { savedLoginReminder, formatSavedLoginTime } from "../../../savedLoginReminder";
 import { now } from "../../../../../webview/shared/model";
 import { cx } from "../../../../../webview/shared/lib";
 import { Button, EmptyState, Icon, SectionHeader } from "../../../../../webview/shared/ui";
@@ -27,6 +27,7 @@ export interface ProfileViewProps {
 
 export function ProfileView({ data, api }: ProfileViewProps) {
   const collapsed = isSectionCollapsed("profile");
+  const activeProfile = data.savedProfiles.find(p => p.slug === data.activeProfileSlug);
   const olderProfiles = data.savedProfiles.filter(p =>
     savedLoginReminder(p.savedAt, p.slug === data.activeProfileSlug, now.value),
   );
@@ -49,6 +50,7 @@ export function ProfileView({ data, api }: ProfileViewProps) {
               <Icon name="circle-alert" size={14} />
               <div class="acct-banner-text">
                 <strong>Your saved login differs from the current login.</strong>
+                <span>{formatSavedLoginTime(activeProfile?.savedAt ?? "", now.value)}</span>
                 <span>Open saved accounts and use Update snapshot on the active account. Verify the account in Claude before confirming; the local name may be outdated.</span>
               </div>
               <Button variant="secondary" onClick={() => api.openAccountSwitcher()}>
@@ -61,7 +63,12 @@ export function ProfileView({ data, api }: ProfileViewProps) {
               <Icon name="circle-alert" size={14} />
               <div class="acct-banner-text">
                 <strong>Saved login reminder (6 hours)</strong>
-                <span>{olderProfiles.map(p => p.label || p.email || "Saved account").join(", ")}: last saved at least six hours ago. When switching, sign in again if Claude requests it, verify the account, then update its snapshot. This reminder does not mean the login has expired.</span>
+                {olderProfiles.map(p => (
+                  <span key={p.slug}>
+                    {p.label || p.email || "Saved account"} — {formatSavedLoginTime(p.savedAt, now.value)}
+                  </span>
+                ))}
+                <span>Times show when each login snapshot was saved or updated, not its exact sign-in time. When switching, sign in again if Claude requests it, verify the account, then update its snapshot. This reminder does not mean the login has expired.</span>
               </div>
             </div>
           ) : null}
