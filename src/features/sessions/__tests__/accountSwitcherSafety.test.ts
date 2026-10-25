@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   current: {} as any, picker: undefined as any, accept: undefined as (() => Promise<void>) | undefined,
   update: vi.fn(), switch: vi.fn(), saveNew: vi.fn(), warning: vi.fn(), launch: vi.fn(), error: vi.fn(), events: [] as string[],
-  audit: [] as Array<{ event: string; fields?: any }>, info: vi.fn(), command: vi.fn(), push: vi.fn(),
+  remove: vi.fn(), button: undefined as any, audit: [] as Array<{ event: string; fields?: any }>, info: vi.fn(), command: vi.fn(), push: vi.fn(),
 }));
 vi.mock("vscode", () => ({
   ThemeIcon: class { constructor(public id: string) {} },
@@ -11,7 +11,7 @@ vi.mock("vscode", () => ({
   window: {
     createQuickPick: () => (state.picker = {
       items: [], selectedItems: [], hide: vi.fn(), dispose: vi.fn(), show: vi.fn(),
-      onDidTriggerItemButton: vi.fn(), onDidHide: vi.fn(),
+      onDidTriggerItemButton: (handler: any) => { state.button = handler; }, onDidHide: vi.fn(),
       onDidAccept: (handler: () => Promise<void>) => { state.accept = handler; },
     }),
     showErrorMessage: state.error, showInformationMessage: state.info, showWarningMessage: state.warning,
@@ -19,7 +19,7 @@ vi.mock("vscode", () => ({
   commands: { executeCommand: state.command },
 }));
 vi.mock("../../account/parser", () => ({ parseAccountData: () => state.current }));
-vi.mock("../../account/profiles", () => ({ removeProfile: vi.fn() }));
+vi.mock("../../account/profiles", () => ({ removeProfile: state.remove }));
 vi.mock("../profileActions", () => ({ updateProfileWithConfirmation: state.update, switchProfileWithConfirmation: state.switch }));
 vi.mock("../accountHandlers", () => ({ promptToSaveProfile: state.saveNew }));
 vi.mock("../accountPush", () => ({ postAccountData: state.push }));
@@ -50,6 +50,7 @@ beforeEach(() => {
   state.switch.mockResolvedValue({ ok: true, data: { label: "alice" } });
   state.saveNew.mockResolvedValue(true);
   state.warning.mockResolvedValue(undefined);
+  state.remove.mockReset().mockReturnValue({ ok: true, data: null });
 });
 describe("login transition from the account picker", () => {
   it("preserves the outgoing snapshot before opening Claude login", async () => {
@@ -128,12 +129,13 @@ describe("saved account preservation from the picker", () => {
     expect(state.saveNew).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled();
   });
-  it("shows unreadable saved slots without restoring or deleting them", async () => {
+  it("keeps unreadable saved slots when deletion is not confirmed", async () => {
     state.current.profileStorageIssues = [{ slug: "old-account", code: "profile-unreadable", detail: "The saved account remains stored but cannot be read." }];
     await openAccountSwitcher({ getWebview: () => undefined, dispatch: vi.fn() });
     expect(state.picker.items.some((item: any) => item.label === "old-account")).toBe(true);
     await choose("unreadable");
-    expect(state.error).toHaveBeenCalledWith("The saved account remains stored but cannot be read.");
+    expect(state.warning).toHaveBeenCalled();
+    expect(state.remove).not.toHaveBeenCalled();
     expect(state.switch).not.toHaveBeenCalled();
     expect(state.update).not.toHaveBeenCalled();
   });
@@ -236,4 +238,40 @@ it("allows a renamed email when the live and saved account UUID agree", async ()
   state.current.profile.email = "renamed@example.test";
   await openAccountSwitcher({ getWebview: () => undefined, dispatch: vi.fn() });
   expect(state.picker.items.find((item: any) => item.slug === "alice").detail).toContain("renamed@example.test");
+});
+
+describe('deleting unreadable saved profiles', () => {
+  async function openBroken() {
+    state.current.profileStorageIssues = [{slug: 'broken', detail: 'Cannot unlock'}, {slug: null, detail: 'Storage unavailable'}];
+    await openAccountSwitcher({getWebview: () => ({} as any), dispatch: vi.fn()});
+    return state.picker.items.find((p: any) => p.slug === 'broken');
+  }
+  it('offers a delete button for a broken slot, but not a storage-wide error', async () => {
+    const row = await openBroken();
+    expect(row.buttons[0].tooltip).toBe('Delete saved profile');
+    expect(state.picker.items.find((p: any) => p.label === 'Saved account storage').buttons).toBeUndefined();
+    state.warning.mockResolvedValue('Delete');
+    await state.button({item: row, button: row.buttons[0]});
+    expect(state.remove).toHaveBeenCalledWith('broken');
+    expect(state.push).toHaveBeenCalled();
+    expect(state.switch).not.toHaveBeenCalled();
+  });
+  it('supports selecting the broken row and preserves it on cancellation', async () => {
+    await openBroken(); await choose('unreadable', 'broken');
+    expect(state.warning).toHaveBeenCalled();
+    expect(state.remove).not.toHaveBeenCalled();
+  });
+  it('reports backend deletion failures without claiming success', async () => {
+    await openBroken(); state.warning.mockResolvedValue('Delete');
+    state.remove.mockReturnValue({ok:false, error:'copy-failed', detail:'Storage busy'});
+    await choose('unreadable', 'broken');
+    expect(state.error).toHaveBeenCalledWith(expect.stringContaining('Storage busy'));
+    expect(state.info).not.toHaveBeenCalled();
+  });
+  it('catches storage exceptions without exposing internal details', async () => {
+    await openBroken(); state.warning.mockResolvedValue('Delete');
+    state.remove.mockImplementation(() => {throw Error('private-path');});
+    await choose('unreadable', 'broken');
+    expect(state.error).toHaveBeenCalledWith('Could not delete saved profile. Check storage access and try again.');
+  });
 });

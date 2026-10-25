@@ -256,3 +256,18 @@ it("keeps both accounts correctly identified through repeated switches", () => {
     expect(readAccountSnapshot(path.join(fixture.vault, slug)).credsRaw).toBe(fs.readFileSync(liveCredentials, "utf8"));
   }
 });
+
+it('deletes a damaged saved copy without touching the current login or other profiles', () => {
+  login('alice'); expect(saveProfile('Account 1').ok).toBe(true);
+  login('bob'); expect(saveProfile('Account 2').ok).toBe(true);
+  const config = fs.readFileSync(liveConfig, 'utf8');
+  const credentials = fs.readFileSync(liveCredentials, 'utf8');
+  const other = fs.readFileSync(path.join(fixture.vault, 'account-2', SNAPSHOT_FILE), 'utf8');
+  fs.writeFileSync(path.join(fixture.vault, 'account-1', SNAPSHOT_FILE), 'damaged');
+  expect(removeProfile('account-1').ok).toBe(true);
+  expect(readProfileListing().issues).toEqual([]);
+  expect(fs.existsSync(path.join(fixture.vault, 'account-1'))).toBe(false);
+  expect(fs.readFileSync(liveConfig, 'utf8')).toBe(config);
+  expect(fs.readFileSync(liveCredentials, 'utf8')).toBe(credentials);
+  expect(fs.readFileSync(path.join(fixture.vault, 'account-2', SNAPSHOT_FILE), 'utf8')).toBe(other);
+});

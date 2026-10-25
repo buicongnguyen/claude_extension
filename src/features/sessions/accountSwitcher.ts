@@ -166,7 +166,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
   }
 
   for (const issue of current.profileStorageIssues ?? []) {
-    items.push({ action: "unreadable", label: issue.slug || "Saved account storage", description: "Cannot read saved account", detail: issue.detail });
+    items.push({ action: "unreadable", slug: issue.slug ?? undefined, label: issue.slug || "Saved account storage", description: "Cannot read saved account", detail: issue.slug ? `${issue.detail} Select this row or use the trash button to delete the saved profile.` : issue.detail, buttons: issue.slug ? [REMOVE_BUTTON] : undefined });
   }
 
   if (items.length > 0) {
@@ -214,6 +214,27 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     }
   };
 
+  const deleteSavedProfile = async (slug: string): Promise<void> => {
+    const label = savedProfiles.find(p => p.slug === slug)?.label || slug;
+    const confirm = await vscode.window.showWarningMessage(
+      'Delete saved profile?',
+      { modal: true, detail: 'Delete "' + label + '" from Manager? This removes only its saved copy. Your current Claude login is unchanged. You may need to sign in again to add this account later.' },
+      'Delete',
+    );
+    if (confirm !== 'Delete') return;
+    try {
+      const result = removeProfileSnapshot(slug);
+      if (!result.ok) {
+        void vscode.window.showErrorMessage('Could not delete saved profile: ' + (result.detail ?? result.error));
+        return;
+      }
+      pushAccountUpdate();
+      void vscode.window.showInformationMessage('Saved profile "' + label + '" deleted. Your current Claude login is unchanged.');
+    } catch {
+      void vscode.window.showErrorMessage('Could not delete saved profile. Check storage access and try again.');
+    }
+  };
+
   picker.onDidTriggerItemButton(async (e) => {
     const slug = (e.item as Item).slug;
     if (!slug) return;
@@ -230,19 +251,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
       pushAccountUpdate();
     } else if (e.button === REMOVE_BUTTON) {
       picker.hide();
-      const confirm = await vscode.window.showWarningMessage(
-        "Delete saved profile?",
-        {
-          modal: true,
-          detail:
-            "The encrypted saved profile will be permanently removed from this extension's storage. The live Claude account isn't affected.",
-        },
-        "Delete",
-      );
-      if (confirm === "Delete") {
-        removeProfileSnapshot(slug);
-        pushAccountUpdate();
-      }
+      await deleteSavedProfile(slug);
     }
   });
 
@@ -358,7 +367,9 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     }
     picker.hide();
     picker.dispose();
-    if (pick.action === "unreadable") {
+    if (pick.action === "unreadable" && pick.slug) {
+      await deleteSavedProfile(pick.slug);
+    } else if (pick.action === "unreadable") {
       void vscode.window.showErrorMessage(pick.detail || "Saved account could not be read. Its stored files were left untouched.");
     } else if (pick.action === "save") {
       await promptToSaveProfile(ctx);
