@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
-import { createTerminal, launchClaudeWithInput } from "../terminal";
+import { createTerminal, launchClaudeWithInput, launchClaudeAccountLogin } from "../terminal";
 import type { MockTerminal } from "../../__mocks__/vscode";
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -45,6 +45,19 @@ describe("personal terminal input safety", () => {
     const cwd = "C:/projects/$(Write-Output synthetic-marker)";
     expect(createTerminal("ask", cwd)).not.toBe(existing);
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ cwd }));
+    expect(sendText).not.toHaveBeenCalled();
+  });
+});
+
+describe('direct account login', () => {
+  it('launches auth login with email instead of an existing chat', () => {
+    const sendText=vi.fn();
+    launchClaudeAccountLogin({sendText, show:vi.fn(), shellIntegration:{}} as unknown as vscode.Terminal, 'other+test@example.com');
+    expect(sendText.mock.calls).toEqual([['claude auth login --claudeai --email "other+test@example.com"']]);
+  });
+  it.each(['a@example.com;whoami', 'a@example.com\nwhoami', 'a@example.com"', '$(whoami)@example.com', '%PATH%@example.com'])('rejects shell syntax: %s', email => {
+    const sendText=vi.fn();
+    expect(() => launchClaudeAccountLogin({sendText, show:vi.fn(), shellIntegration:{}} as unknown as vscode.Terminal, email)).toThrow();
     expect(sendText).not.toHaveBeenCalled();
   });
 });

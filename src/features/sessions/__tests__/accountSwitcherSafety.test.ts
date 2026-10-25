@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   current: {} as any, picker: undefined as any, accept: undefined as (() => Promise<void>) | undefined,
   update: vi.fn(), switch: vi.fn(), saveNew: vi.fn(), warning: vi.fn(), launch: vi.fn(), error: vi.fn(), events: [] as string[],
-  remove: vi.fn(), button: undefined as any, audit: [] as Array<{ event: string; fields?: any }>, info: vi.fn(), command: vi.fn(), push: vi.fn(),
+  input: vi.fn(), remove: vi.fn(), button: undefined as any, audit: [] as Array<{ event: string; fields?: any }>, info: vi.fn(), command: vi.fn(), push: vi.fn(),
 }));
 vi.mock("vscode", () => ({
   ThemeIcon: class { constructor(public id: string) {} },
@@ -14,7 +14,7 @@ vi.mock("vscode", () => ({
       onDidTriggerItemButton: (handler: any) => { state.button = handler; }, onDidHide: vi.fn(),
       onDidAccept: (handler: () => Promise<void>) => { state.accept = handler; },
     }),
-    showErrorMessage: state.error, showInformationMessage: state.info, showWarningMessage: state.warning,
+    showInputBox: state.input, showErrorMessage: state.error, showInformationMessage: state.info, showWarningMessage: state.warning,
   },
   commands: { executeCommand: state.command },
 }));
@@ -24,7 +24,7 @@ vi.mock("../profileActions", () => ({ updateProfileWithConfirmation: state.updat
 vi.mock("../accountHandlers", () => ({ promptToSaveProfile: state.saveNew }));
 vi.mock("../accountPush", () => ({ postAccountData: state.push }));
 vi.mock("../../../extension/workspace", () => ({ getWorkspace: () => undefined }));
-vi.mock("../../../extension/terminal", () => ({ createTerminal: vi.fn(), launchClaudeWithInput: state.launch }));
+vi.mock("../../../extension/terminal", () => ({ createTerminal: vi.fn(), launchClaudeAccountLogin: state.launch, isLoginEmail: (email: string) => /^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email) }));
 
 vi.mock("../../account/accountAudit", () => ({
   withAccountAudit: (_action: string, work: () => unknown) => { state.audit.push({ event: "operation_started" }); return work(); },
@@ -50,6 +50,7 @@ beforeEach(() => {
   state.switch.mockResolvedValue({ ok: true, data: { label: "alice" } });
   state.saveNew.mockResolvedValue(true);
   state.warning.mockResolvedValue(undefined);
+  state.input.mockReset().mockResolvedValue("other@example.test");
   state.remove.mockReset().mockReturnValue({ ok: true, data: null });
 });
 describe("login transition from the account picker", () => {
@@ -274,4 +275,17 @@ describe('deleting unreadable saved profiles', () => {
     await choose('unreadable', 'broken');
     expect(state.error).toHaveBeenCalledWith('Could not delete saved profile. Check storage access and try again.');
   });
+});
+
+it('starts direct authentication for the requested other email', async () => {
+  await openAccountSwitcher({getWebview: () => undefined, dispatch: vi.fn()});
+  await chooseLogin();
+  expect(state.launch).toHaveBeenCalledWith(undefined, 'other@example.test');
+});
+it('cancelling the email prompt leaves accounts untouched', async () => {
+  state.input.mockResolvedValue(undefined);
+  await openAccountSwitcher({getWebview: () => undefined, dispatch: vi.fn()});
+  await chooseLogin();
+  expect(state.update).not.toHaveBeenCalled();
+  expect(state.launch).not.toHaveBeenCalled();
 });

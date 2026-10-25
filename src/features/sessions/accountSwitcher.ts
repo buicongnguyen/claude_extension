@@ -20,7 +20,7 @@ import type { SavedProfile } from "../account/profiles";
 import { savedLoginReminder, formatSavedLoginTime } from "../account/savedLoginReminder";
 import { describeProfileQuota } from "../account/profileQuota";
 import { getWorkspace } from "../../extension/workspace";
-import { launchClaudeWithInput, createTerminal } from "../../extension/terminal";
+import { launchClaudeAccountLogin, isLoginEmail, createTerminal } from "../../extension/terminal";
 import { buildSwitchConfirmDetail } from "./hostContext";
 import type { WebviewMessage } from "./types";
 
@@ -189,7 +189,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     action: "login",
     iconPath: LOGIN_ICON,
     label: "Log in as a new account",
-    detail: "Opens Claude and offers /login to copy and paste",
+    detail: "Enter the other account’s email and start browser sign-in",
   });
 
   const picker = vscode.window.createQuickPick<Item>();
@@ -374,6 +374,16 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
     } else if (pick.action === "save") {
       await promptToSaveProfile(ctx);
     } else if (pick.action === "login") {
+      const email = await vscode.window.showInputBox({
+        title: "Log in as a new Claude account",
+        prompt: "Enter the other account’s email. Browser sign-in must finish before you save it as a new profile.",
+        placeHolder: "other-account@example.com",
+        ignoreFocusOut: true,
+        validateInput: value => isLoginEmail(value.trim()) ? undefined : "Enter a simple email address (letters, numbers, dots, underscores, plus or hyphen).",
+      });
+      if (email === undefined) return;
+      const loginEmail = email.trim();
+      if (!isLoginEmail(loginEmail)) return;
       // Re-read after the picker was open. Save any rotated outgoing tokens
       // before /login replaces them, using the same explicit lineage check.
       const loginCurrent = parseAccountData(workspace || undefined);
@@ -413,7 +423,7 @@ export async function openAccountSwitcher(ctx: AccountSwitcherContext): Promise<
         // choice === "Log in anyway" falls through to the login.
       }
       const term = createTerminal("login");
-      void launchClaudeWithInput(term, "/login");
+      launchClaudeAccountLogin(term, loginEmail);
     }
   });
 

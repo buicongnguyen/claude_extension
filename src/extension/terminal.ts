@@ -149,6 +149,21 @@ export function runInTerminal(term: vscode.Terminal, command: string): void {
   timer = setTimeout(finish, SHELL_INTEGRATION_TIMEOUT_MS);
 }
 
+/** Restrict shell arguments to simple email addresses; never interpolate arbitrary input. */
+export function isLoginEmail(email: string): boolean {
+  return email.length <= 254 && /^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email);
+}
+
+/** Start authentication directly, without opening the existing conversation or logging out. */
+export function launchClaudeAccountLogin(term: vscode.Terminal, email: string): void {
+  if (!isLoginEmail(email)) throw new Error("Invalid login email");
+  term.show();
+  runInTerminal(term, 'claude auth login --claudeai --email "' + email + '"');
+  void vscode.window.showInformationMessage(
+    "Complete sign-in in the browser and check the email before authorizing. If it shows your current account, open the login URL in a private browser window. After success, save the new account in Manager. Email prefill does not force account selection.",
+  );
+}
+
 /** Personal fork: input is never injected into a terminal on a readiness guess. */
 export async function launchClaudeWithInput(term: vscode.Terminal, input: string): Promise<void> {
   term.show();
